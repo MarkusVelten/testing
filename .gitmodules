@@ -8,5 +8,5 @@
 	branch = develop
 [submodule "dash"]
 	path = dash
-	url = tudd-github:MarkusVelten/dash.git
+	url = https://github.com/MarkusVelten/dash.git
 	branch = feat-dash-localmirror
