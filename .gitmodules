@@ -2,11 +2,11 @@
 	path = alpaka
 	url = https://github.com/mephisto-hpc/alpaka.git
 	branch = develop
-[submodule "dash"]
-	path = dash
-	url = https://github.com/dash-project/dash.git
-	branch = development
 [submodule "llama"]
 	path = llama
 	url = https://github.com/mephisto-hpc/llama.git
 	branch = develop
+[submodule "dash"]
+	path = dash
+	url = tudd-github:MarkusVelten/dash.git
+	branch = feat-dash-localmirror
