@@ -1,7 +1,10 @@
 #include <iostream>
 #include <utility>
 
+#include <typeinfo>
+
 #include <libdash.h>
+#include <dash/LocalMirror.h>
 
 #ifdef ALPAKA_ACC_GPU_CUDA_ENABLED
 #define NBODY_CUDA 1
@@ -222,7 +225,7 @@ int main(int argc,char * * argv)
     auto    devView =    DevFactory::allocView( mapping,  devAcc );
 
     // will be used as double buffer for remote->host and host->device copying
-    auto   remoteHostView =   HostFactory::allocView( mapping, devHost );
+//    auto   remoteHostView =   HostFactory::allocView( mapping, devHost );
     auto    remoteDevView =    DevFactory::allocView( mapping,  devAcc );
 
 
@@ -276,44 +279,29 @@ int main(int argc,char * * argv)
         // get remote local block into remoteHostView
         auto remote_begin = particles.begin() + (remote * problemSize);
         auto remote_end   = remote_begin + problemSize;
-        auto target_begin = reinterpret_cast<particle*>(alpaka::mem::view::getPtrNative(remoteHostView.blob[0].buffer));
-        dash::copy(remote_begin, remote_end, target_begin);
 
-        std::cout << "remote_begin: " << remote_begin <<", remote_end: " << remote_end << ", target_begin: " << target_begin << std::endl;
+    // LocalMirror:
+#if 1 == 1
+        using mirror_t = dash::LocalMirror<decltype(particles.begin()), dash::HostSpace>;
+        std::cout << "HostSpace\n";
+#elif 1 == 2
+        using mirror_t = dash::LocalMirror<decltype(particles.begin()), dash::HBWSpace>;
+        std::cout << "HBWSpace\n";
+#endif
+
+        mirror_t mirror{};
+
+        mirror.replicate(remote_begin, remote_end);
         
+        auto remoteHostView = LocalFactory::allocView( mapping, mirror.begin() );
+
         if (remoteHostView(0)( dd::Pos(), dd::X() ) != remote)
           std::cout << "wrong!\n";  
 
-        alpakaMemCopy( remoteDevView, remoteHostView, userDomainSize, queue );
+    //    alpakaMemCopy( remoteDevView, remoteHostView, userDomainSize, queue );
 
     }
 
-    std::cout << "\n Verification: \n remoteHostView \t hostView \n";
-    LLAMA_INDEPENDENT_DATA
-    for (std::size_t i = 0; i < 10; ++i)
-    {
-        std::cout << remoteHostView(i)( dd::Pos(), dd::X() ) \ 
-            << "\t" \
-            << remoteHostView(i)( dd::Pos(), dd::Y() ) \
-            << "\t" \
-            << hostView(i)( dd::Pos(), dd::X() ) \ 
-            << "\t" \
-            << hostView(i)( dd::Pos(), dd::Y() ) \
-            << std::endl;
-    }
-
-    //bool check = true;
-    //for (std::size_t i = 0; i < problemSize; ++i){
-    //    if (remoteHostView(i)( dd::Pos(), dd::X() ) !=  hostView(i)( dd::Pos(), dd::X() ) ||
-    //        remoteHostView(i)( dd::Pos(), dd::Y() ) !=  hostView(i)( dd::Pos(), dd::Y() ) ){
-    //        std::cout << "Data sets not identical! Copying failed.\n";
-
-    //        check = false;
-    //    }
-    //}
-
-    //if (check)
-    //    std::cout << "Data identical, copying succeeded!\n";
     dash::finalize();
 
     return 0;
