@@ -39,24 +39,24 @@
  *               Define relevant constants here                     *
  ***************************************************************** */
 
-#define NBODY_PROBLEM_SIZE 1500
+#define NBODY_PROBLEM_SIZE 1000
 #define NBODY_BLOCK_SIZE 256
-#define NBODY_STEPS 10000
+#define NBODY_STEPS 1000000
 #define DATA_DUMP_STEPS 100 // write data to file every N steps
 
 using Element = float; // change to double if needed
 
 constexpr Element EPS2 = 0.01;
 
-constexpr Element ts = 1e-14; // timestep in [s]
+constexpr Element ts = 1e-7; // timestep in [s]
 
 constexpr Element particleMass = 24*1.66053886E-27;// M(Mg)/A =  4.03594014⋅10−27 kg
 
 constexpr Element particleCharge = 1.6021766209e-19; // [C]
 
-constexpr Element voltage = 5; // [V]
+constexpr Element voltage = 5.; // [V]
 
-constexpr Element rmin = 0; // position of potential minimum x=y=z=0
+constexpr Element rmin = 0.; // position of potential minimum x=y=z=0
 
 constexpr Element rNull = 1.5e-2; // [m]
 constexpr Element rNullSquared = rNull*rNull; // [m]
@@ -103,7 +103,7 @@ namespace dd
     struct Z {};
     struct HForce {};
     struct CForce {};
-    struct Mass {};
+//     struct Mass {};
 }
 
 struct particle
@@ -120,7 +120,7 @@ struct particle
     {
         Element x, y, z;
     } cForce;
-    Element mass;
+//     Element mass;
 };
 
 using Particle = llama::DS<
@@ -138,8 +138,8 @@ using Particle = llama::DS<
         llama::DE< dd::X, Element >,
         llama::DE< dd::Y, Element >,
         llama::DE< dd::Z, Element >
-    > >,
-    llama::DE< dd::Mass, Element > //mass
+    > >
+//     llama::DE< dd::Mass, Element > //mass
 >;
 
 template<
@@ -170,7 +170,7 @@ pPInteraction(
     Element invDistCube = 1.0f / sqrtf(distSixth);
     Element dist = sqrt(distSqr);
     Element distCube = distSqr * dist;
-    Element s = remoteP( dd::Mass() ) * invDistCube;
+    Element s = particleMass * invDistCube;
 
     Element const v_d[3] = {
         d[0] * s * ts,
@@ -416,23 +416,23 @@ struct SingleParticleKernel
             // cooling laser force
             Element lForce[3] = {
                 cooling_linear( particles( pos )( dd::Pos(), dd::X()),
-                                -20,
-                                -10) +
+                                -20.,
+                                -10.) +
                 cooling_linear( particles( pos )( dd::Pos(), dd::X()),
-                                20,
-                                10),
+                                20.,
+                                10.),
                 cooling_linear( particles( pos )( dd::Pos(), dd::Y()),
-                                -20,
-                                -10) +
+                                -20.,
+                                -10.) +
                 cooling_linear( particles( pos )( dd::Pos(), dd::Y()),
-                                -20,
-                                -10),
+                                -20.,
+                                -10.),
                 cooling_linear( particles( pos )( dd::Pos(), dd::Y()),
-                                -20,
-                                -10) +
+                                -20.,
+                                -10.) +
                 cooling_linear( particles( pos )( dd::Pos(), dd::Y()),
-                                -20,
-                                -10)
+                                -20.,
+                                -10.)
             };
 
             // harmonic forces
@@ -706,7 +706,7 @@ int main(int argc,char * * argv)
         hostView(i)(dd::CForce(), dd::Z()) = 0;
 
         // initialize mass with constant
-        hostView(i)(dd::Mass()) = particleMass;
+//         hostView(i)(dd::Mass()) = particleMass;
         /*
         std::cout << hostView(i)(dd::Pos(), dd::X()) \
             << "\t" \
