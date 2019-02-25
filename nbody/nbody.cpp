@@ -304,7 +304,7 @@ template<
 >
 
 // called for a block of particles
-struct UpdateKernel
+struct ParticleInteractionKernel
 {
     template<
         typename T_Acc,
@@ -393,7 +393,7 @@ template<
     std::size_t problemSize,
     std::size_t elems
 >
-struct MoveKernel
+struct SingleParticleKernel
 {
     template<
         typename T_Acc,
@@ -533,113 +533,6 @@ struct HarmonicKernel
                 particleCharge * ( -2.0 * voltage / rNullSquared) *
                 ( particles( hForce )( dd::Pos(), dd::Z()) - rmin );
         }
-    }
-};
-
-// compute the coulomb forces
-
-// copy Harmonic Kernel
-// ComputeDistances
-// ComputeChargeProduct
-// ComputeCoulombForce
-// Set_exchcoulomb
-// Get_exchcoulomb
-
-template<
-    std::size_t problemSize,
-    std::size_t elems,
-    std::size_t blockSize
->
-struct CoulombKernel
-{
-    template<
-    typename T_Acc,
-    typename T_View
-    >
-    LLAMA_FN_HOST_ACC_INLINE
-    void operator()(
-    T_Acc const &acc,
-    T_View particles,
-    Element ts
-    ) const
-    {
-        auto threadIndex  = alpaka::idx::getIdx<
-        alpaka::Grid,
-        alpaka::Threads
-        >( acc )[ 0u ];
-
-        auto const start = threadIndex * elems;
-        auto const   end = alpaka::math::min(
-        acc,
-        (threadIndex + 1) * elems,
-        problemSize
-        );
-
-        Element forceX, forceY, forceZ, forcefactor;
-
-        // reset force to zero, otherwise force will increase with every kernel call
-        LLAMA_INDEPENDENT_DATA
-        for ( std::size_t p = 0; p < problemSize; ++p )
-        {
-            particles( p )( dd::CForce(), dd::X() )  = 0;
-            particles( p )( dd::CForce(), dd::Y() )  = 0;
-            particles( p )( dd::CForce(), dd::Z() )  = 0;
-
-            particles( p )( dd::CForce(), dd::X() ) = 0;
-            particles( p )( dd::CForce(), dd::Y() ) = 0;
-            particles( p )( dd::CForce(), dd::Z() ) = 0;
-        }
-
-//         LLAMA_INDEPENDENT_DATA
-//         for ( std::size_t b = 0; b < problemSize / blockSize; ++b )
-//         {
-//             auto const start2 = b * blockSize;
-//             auto const   end2 = alpaka::math::min(
-//                 acc,
-//                 start2 + blockSize,
-//                 problemSize
-//             ) - start2;
-//
-//             LLAMA_INDEPENDENT_DATA
-//             for ( auto pos2 = decltype(end2)(0); pos2 < end2; ++pos2 ){
-//                 LLAMA_INDEPENDENT_DATA
-//                 for ( auto pos = start; pos < end; ++pos )
-//                 {
-//                     // calculate distances between particles
-//
-//                     Element const d[3] = {
-//                         particles( pos )( dd::Pos(), dd::X() ) -
-//                         particles( pos2 )( dd::Pos(), dd::X() ),
-//                         particles( pos )( dd::Pos(), dd::Y() ) -
-//                         particles( pos2 )( dd::Pos(), dd::Y() ),
-//                         particles( pos )( dd::Pos(), dd::Z() ) -
-//                         particles( pos2 )( dd::Pos(), dd::Z() )
-//                     }
-//                     Element distSqr  = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
-//                     Element dist     = sqrt(distSqr);
-//                     Element distCube = distSqr * dist;
-//
-//                     // calculate coulomb force
-//                     if ( distCube > 0. ){
-//                         forcefactor = phys_emfactor * particleCharge *
-//                             particleCharge / distCube;
-//
-//                         forceX = forcefactor * d[0];
-//                         forceY = forcefactor * d[1];
-//                         forceZ = forcefactor * d[2];
-//
-//                         particles( pos )( dd::CForce(), dd::X() )  += forceX;
-//                         particles( pos )( dd::CForce(), dd::Y() )  += forceY;
-//                         particles( pos )( dd::CForce(), dd::Z() )  += forceZ;
-//
-//                         particles( pos2 )( dd::CForce(), dd::X() ) -= forceX;
-//                         particles( pos2 )( dd::CForce(), dd::Y() ) -= forceY;
-//                         particles( pos2 )( dd::CForce(), dd::Z() ) -= forceZ;
-//
-//                     }
-//                 }
-//             }
-//         }
     }
 };
 
@@ -911,15 +804,15 @@ int main(int argc,char * * argv)
     };
 
     // copy hostView to devView
-    UpdateKernel<
+    ParticleInteractionKernel<
         problemSize,
         elemCount,
         blockSize
-    > updateKernel;
-    MoveKernel<
+    > ParticleInteractionKernel;
+    SingleParticleKernel<
         problemSize,
         elemCount
-    > moveKernel;
+    > SingleParticleKernel;
     HarmonicKernel<
         problemSize,
         elemCount
@@ -936,7 +829,7 @@ int main(int argc,char * * argv)
         alpaka::kernel::exec< Acc > (
             queue,
             workdiv,
-            updateKernel,
+            ParticleInteractionKernel,
             mirrowView,
             mirrowView,
             ts
@@ -962,7 +855,7 @@ int main(int argc,char * * argv)
             alpaka::kernel::exec< Acc > (
                 queue,
                 workdiv,
-                updateKernel,
+                ParticleInteractionKernel,
                 mirrowView,
                 remoteMirrowView,
                 ts
@@ -982,21 +875,11 @@ int main(int argc,char * * argv)
         );
         chrono.printAndReset("Harmonic kernel:         ");
 
-//         // call coulomb kernel
-//         alpaka::kernel::exec<Acc>(
-//             queue,
-//             workdiv,
-//             coulombKernel,
-//             mirrowView,
-//             ts
-//         );
-//         chrono.printAndReset("Coulomb kernel:         ");
-
         // move kernel
         alpaka::kernel::exec<Acc>(
             queue,
             workdiv,
-            moveKernel,
+            SingleParticleKernel,
             mirrowView,
             ts
         );
