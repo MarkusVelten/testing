@@ -50,16 +50,15 @@ constexpr Element EPS2 = 0.01;
 
 constexpr Element ts = 1e-14; // timestep in [s]
 
-constexpr Element particleMass = 4.03594014E-27+2*9.1093826E-31;// M(Mg)/A =  4.03594014⋅10−27 kg + 2me
+constexpr Element particleMass = 24*1.66053886E-27;// M(Mg)/A =  4.03594014⋅10−27 kg
 
-// Mg(2+) Ion => 2e = 2x 1.6021766208(98)×10−19 C = 3.204353e-19 [C]
-constexpr Element particleCharge = 3.204353e-19; // [C] // 2*e
+constexpr Element particleCharge = 1.6021766209e-19; // [C]
 
 constexpr Element voltage = 5; // [V]
 
 constexpr Element rmin = 0; // position of potential minimum x=y=z=0
 
-constexpr Element rNull = 1e-6; // [m]
+constexpr Element rNull = 1.5e-2; // [m]
 constexpr Element rNullSquared = rNull*rNull; // [m]
 
 constexpr Element phys_c        = 299792458.;
@@ -467,11 +466,11 @@ struct MoveKernel
 
             // v += a * dt
             particles( pos )( dd::Vel(), dd::X() ) +=
-            a[0] * ts; // ts = timestep
+                a[0] * ts; // ts = timestep
             particles( pos )( dd::Vel(), dd::Y() ) +=
-            a[1] * ts;
+                a[1] * ts;
             particles( pos )( dd::Vel(), dd::Z() ) +=
-            a[2] * ts;
+                a[2] * ts;
 
             // pos += v * dt
             particles( pos )( dd::Pos(), dd::X() ) +=
