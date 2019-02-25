@@ -97,14 +97,14 @@ pos += v * dt
 
 namespace dd
 {
-    struct Pos {};
-    struct Vel {};
-    struct X {};
-    struct Y {};
-    struct Z {};
-    struct HForce {};
-    struct CForce {};
-    struct Mass {};
+    struct Pos {}
+    struct Vel {}
+    struct X {}
+    struct Y {}
+    struct Z {}
+    struct HForce {}
+    struct CForce {}
+    struct Mass {}
 }
 
 struct particle
@@ -126,7 +126,7 @@ struct particle
         Element x, y, z;
     } cForce;
     Element mass;
-};
+}
 
 using Particle = llama::DS<
     llama::DE< dd::Pos, llama::DS< //position
@@ -151,6 +151,73 @@ using Particle = llama::DS<
     > >,
     llama::DE< dd::Mass, Element > //mass
 >;
+
+template<
+    typename T_VirtualDatum1,
+    typename T_VirtualDatum2
+>
+LLAMA_FN_HOST_ACC_INLINE
+auto
+pPInteraction(
+    T_VirtualDatum1&& localP, //self
+    T_VirtualDatum2&& remoteP, //comparison
+    Element const & ts
+)
+-> void
+{
+    // main computation for two elements
+    Element const d[3] = {
+        localP( dd::Pos(), dd::X() ) -
+        remoteP( dd::Pos(), dd::X() ),
+        localP( dd::Pos(), dd::Y() ) -
+        remoteP( dd::Pos(), dd::Y() ),
+        localP( dd::Pos(), dd::Z() ) -
+        remoteP( dd::Pos(), dd::Z() )
+    }
+
+    Element distSqr = d[0] * d[0] + d[1] * d[1] + d[2] * d[2] + EPS2;
+    Element distSixth = distSqr * distSqr * distSqr;
+    Element invDistCube = 1.0f / sqrtf(distSixth);
+    Element dist = sqrt(distSqr);
+    Element distCube = distSqr * dist;
+    Element s = remoteP( dd::Mass() ) * invDistCube;
+
+    Element const v_d[3] = {
+        d[0] * s * ts,
+        d[1] * s * ts,
+        d[2] * s * ts
+    }
+
+    localP( dd::Vel(), dd::X() ) += v_d[0];
+    localP( dd::Vel(), dd::Y() ) += v_d[1];
+    localP( dd::Vel(), dd::Z() ) += v_d[2];
+
+    Element forceX, forceY, forceZ, forcefactor;
+
+    // calculate coulomb force
+
+//     remoteP( dd::CForce(), dd::X() ) = 0;
+//     remoteP( dd::CForce(), dd::Y() ) = 0;
+//     remoteP( dd::CForce(), dd::Z() ) = 0;
+
+    if ( distCube > 0. ){
+        forcefactor = phys_emfactor * particleCharge *
+            particleCharge / distCube;
+
+        forceX = forcefactor * d[0];
+        forceY = forcefactor * d[1];
+        forceZ = forcefactor * d[2];
+
+        localP( dd::CForce(), dd::X() )  += forceX;
+        localP( dd::CForce(), dd::Y() )  += forceY;
+        localP( dd::CForce(), dd::Z() )  += forceZ;
+
+//         remoteP( dd::CForce(), dd::X() ) -= forceX;
+//         remoteP( dd::CForce(), dd::Y() ) -= forceY;
+//         remoteP( dd::CForce(), dd::Z() ) -= forceZ;
+
+    }
+}
 
 template<
     typename T_Acc,
@@ -181,7 +248,7 @@ struct BlockSharedMemoryAllocator
     {
         return T_Factory::allocView( mapping, acc );
     }
-};
+}
 
 template<
     typename T_Acc,
@@ -214,7 +281,99 @@ struct BlockSharedMemoryAllocator<
     {
         return T_Factory::allocView( mapping );
     }
-};
+}
+
+template<
+    std::size_t problemSize,
+    std::size_t elems,
+    std::size_t blockSize
+>
+
+// called for a block of particles
+struct UpdateKernel
+{
+    template<
+        typename T_Acc,
+        typename T_ViewLocal,
+        typename T_ViewRemote
+    >
+    LLAMA_FN_HOST_ACC_INLINE
+    void operator()(
+        T_Acc const &acc,
+        T_ViewLocal localParticles,
+        T_ViewRemote remoteParticles,
+        Element ts
+    ) const
+    {
+
+        constexpr std::size_t threads = blockSize / elems;
+        using SharedAllocator = BlockSharedMemoryAllocator<
+            T_Acc,
+            llama::SizeOf< typename decltype(remoteParticles)::Mapping::DatumDomain >::value
+            * blockSize,
+            __COUNTER__,
+            threads
+        >;
+
+
+        using SharedMapping = llama::mapping::SoA<
+            typename decltype(remoteParticles)::Mapping::UserDomain,
+            typename decltype(remoteParticles)::Mapping::DatumDomain
+        >;
+        SharedMapping const sharedMapping( { blockSize } );
+
+        using SharedFactory = llama::Factory<
+            SharedMapping,
+            typename SharedAllocator::type
+        >;
+
+        auto temp = SharedAllocator::template allocView<
+            SharedFactory,
+            SharedMapping
+        >( sharedMapping, acc );
+
+        auto threadIndex  = alpaka::idx::getIdx<
+            alpaka::Grid,
+            alpaka::Threads
+        >( acc )[ 0u ];
+
+        auto const start = threadIndex * elems;
+        auto const   end = alpaka::math::min(
+            acc,
+            start + elems,
+            problemSize
+        );
+        LLAMA_INDEPENDENT_DATA
+        for ( std::size_t b = 0; b < problemSize / blockSize; ++b )
+        {
+            auto const start2 = b * blockSize;
+            auto const   end2 = alpaka::math::min(
+                acc,
+                start2 + blockSize,
+                problemSize
+            ) - start2;
+
+            LLAMA_INDEPENDENT_DATA
+            for (
+                auto pos2 = decltype(end2)(0);
+                pos2 + threadIndex < end2;
+                pos2 += threads
+            )
+                temp(pos2 + threadIndex) = remoteParticles( start2 + pos2 + threadIndex );
+
+            // compute loop
+            LLAMA_INDEPENDENT_DATA
+            for ( auto pos2 = decltype(end2)(0); pos2 < end2; ++pos2 )
+                LLAMA_INDEPENDENT_DATA
+                for ( auto pos = start; pos < end; ++pos )
+                    pPInteraction(
+                        localParticles( pos ),
+                        temp( pos2 ),
+                        ts
+                    );
+        }
+    }
+}
 
 template<
     std::size_t problemSize,
@@ -256,14 +415,14 @@ struct MoveKernel
                     particles( pos )( dd::CForce(), dd::Y() ),
                 particles( pos )( dd::HForce(), dd::Z() ) +
                     particles( pos )( dd::CForce(), dd::Z() )
-            };
+            }
 
             // F = m * a => d^2x/dt^2 = F(t,x,dx/dt) / m
             Element const a[3] = {
                 F_i[0] / particleMass,
                 F_i[1] / particleMass,
                 F_i[2] / particleMass,
-            };
+            }
 
             // v += a * dt
             particles( pos )( dd::Vel(), dd::X() ) +=
@@ -280,9 +439,16 @@ struct MoveKernel
                 particles( pos )( dd::Vel(), dd::Y() ) * ts;
             particles( pos )( dd::Pos(), dd::Z() ) +=
                 particles( pos )( dd::Vel(), dd::Z() ) * ts;
-        };
+
+            // reset coulomb forces
+            particles( pos )( dd::CForce(), dd::X() )  = 0;
+            particles( pos )( dd::CForce(), dd::Y() )  = 0;
+            particles( pos )( dd::CForce(), dd::Z() )  = 0;
+
+
+        }
     }
-};
+}
 
 // calculate harmonic particle interaction
 template<
@@ -326,9 +492,9 @@ struct HarmonicKernel
             particles( hForce )( dd::HForce(), dd::Z() ) =
                 particleCharge * ( -2.0 * voltage / rNullSquared) *
                 ( particles( hForce )( dd::Pos(), dd::Z()) - rmin );
-        };
+        }
     }
-};
+}
 
 // compute the coulomb forces
 
@@ -384,58 +550,58 @@ struct CoulombKernel
             particles( p )( dd::CForce(), dd::Z() ) = 0;
         }
 
-        LLAMA_INDEPENDENT_DATA
-        for ( std::size_t b = 0; b < problemSize / blockSize; ++b )
-        {
-            auto const start2 = b * blockSize;
-            auto const   end2 = alpaka::math::min(
-                acc,
-                start2 + blockSize,
-                problemSize
-            ) - start2;
-
-            LLAMA_INDEPENDENT_DATA
-            for ( auto pos2 = decltype(end2)(0); pos2 < end2; ++pos2 ){
-                LLAMA_INDEPENDENT_DATA
-                for ( auto pos = start; pos < end; ++pos )
-                {
-                    // calculate distances between particles
-
-                    Element const d[3] = {
-                        particles( pos )( dd::Pos(), dd::X() ) -
-                        particles( pos2 )( dd::Pos(), dd::X() ),
-                        particles( pos )( dd::Pos(), dd::Y() ) -
-                        particles( pos2 )( dd::Pos(), dd::Y() ),
-                        particles( pos )( dd::Pos(), dd::Z() ) -
-                        particles( pos2 )( dd::Pos(), dd::Z() )
-                    };
-                    Element distSqr  = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
-                    Element dist     = sqrt(distSqr);
-                    Element distCube = distSqr * dist;
-
-                    // calculate coulomb force
-                    if ( distCube > 0. ){
-                        forcefactor = phys_emfactor * particleCharge *
-                            particleCharge / distCube;
-
-                        forceX = forcefactor * d[0];
-                        forceY = forcefactor * d[1];
-                        forceZ = forcefactor * d[2];
-
-                        particles( pos )( dd::CForce(), dd::X() )  += forceX;
-                        particles( pos )( dd::CForce(), dd::Y() )  += forceY;
-                        particles( pos )( dd::CForce(), dd::Z() )  += forceZ;
-
-                        particles( pos2 )( dd::CForce(), dd::X() ) -= forceX;
-                        particles( pos2 )( dd::CForce(), dd::Y() ) -= forceY;
-                        particles( pos2 )( dd::CForce(), dd::Z() ) -= forceZ;
-
-                    }
-                }
-            }
-        }
+//         LLAMA_INDEPENDENT_DATA
+//         for ( std::size_t b = 0; b < problemSize / blockSize; ++b )
+//         {
+//             auto const start2 = b * blockSize;
+//             auto const   end2 = alpaka::math::min(
+//                 acc,
+//                 start2 + blockSize,
+//                 problemSize
+//             ) - start2;
+//
+//             LLAMA_INDEPENDENT_DATA
+//             for ( auto pos2 = decltype(end2)(0); pos2 < end2; ++pos2 ){
+//                 LLAMA_INDEPENDENT_DATA
+//                 for ( auto pos = start; pos < end; ++pos )
+//                 {
+//                     // calculate distances between particles
+//
+//                     Element const d[3] = {
+//                         particles( pos )( dd::Pos(), dd::X() ) -
+//                         particles( pos2 )( dd::Pos(), dd::X() ),
+//                         particles( pos )( dd::Pos(), dd::Y() ) -
+//                         particles( pos2 )( dd::Pos(), dd::Y() ),
+//                         particles( pos )( dd::Pos(), dd::Z() ) -
+//                         particles( pos2 )( dd::Pos(), dd::Z() )
+//                     }
+//                     Element distSqr  = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+//                     Element dist     = sqrt(distSqr);
+//                     Element distCube = distSqr * dist;
+//
+//                     // calculate coulomb force
+//                     if ( distCube > 0. ){
+//                         forcefactor = phys_emfactor * particleCharge *
+//                             particleCharge / distCube;
+//
+//                         forceX = forcefactor * d[0];
+//                         forceY = forcefactor * d[1];
+//                         forceZ = forcefactor * d[2];
+//
+//                         particles( pos )( dd::CForce(), dd::X() )  += forceX;
+//                         particles( pos )( dd::CForce(), dd::Y() )  += forceY;
+//                         particles( pos )( dd::CForce(), dd::Z() )  += forceZ;
+//
+//                         particles( pos2 )( dd::CForce(), dd::X() ) -= forceX;
+//                         particles( pos2 )( dd::CForce(), dd::Y() ) -= forceY;
+//                         particles( pos2 )( dd::CForce(), dd::Z() ) -= forceZ;
+//
+//                     }
+//                 }
+//             }
+//         }
     }
-};
+}
 
 template<
     typename T_Acc,
@@ -446,7 +612,7 @@ struct ThreadsElemsDistribution
 {
     static constexpr std::size_t elemCount = blockSize;
     static constexpr std::size_t threadCount = 1u;
-};
+}
 
 #ifdef ALPAKA_ACC_GPU_CUDA_ENABLED
     template<
@@ -463,7 +629,7 @@ struct ThreadsElemsDistribution
     {
         static constexpr std::size_t elemCount = 1u;
         static constexpr std::size_t threadCount = blockSize;
-    };
+    }
 #endif
 
 #ifdef ALPAKA_ACC_CPU_B_SEQ_T_OMP2_ENABLED
@@ -482,7 +648,7 @@ struct ThreadsElemsDistribution
         static constexpr std::size_t elemCount =
             ( blockSize + hardwareThreads - 1u ) / hardwareThreads;
         static constexpr std::size_t threadCount = hardwareThreads;
-    };
+    }
 #endif
 
 template<
@@ -505,7 +671,7 @@ struct PassThroughAllocator
     {
         return reinterpret_cast<BlobType>(pointer);
     }
-};
+}
 
 
 int main(int argc,char * * argv)
@@ -562,7 +728,7 @@ int main(int argc,char * * argv)
 
     // LLAMA
     using UserDomain = llama::UserDomain< 1 >;
-    const UserDomain userDomainSize{ problemSize };
+    const UserDomain userDomainSize{ problemSize }
 
     using Mapping = llama::mapping::SoA<
         UserDomain,
@@ -702,9 +868,14 @@ int main(int argc,char * * argv)
         blocks,
         threads,
         elems
-    };
+    }
 
     // copy hostView to devView
+    UpdateKernel<
+        problemSize,
+        elemCount,
+        blockSize
+    > updateKernel;
     MoveKernel<
         problemSize,
         elemCount
@@ -713,13 +884,53 @@ int main(int argc,char * * argv)
         problemSize,
         elemCount
     > harmonicKernel;
-    CoulombKernel<
-        problemSize,
-        elemCount,
-        blockSize
-    > coulombKernel;
+//     CoulombKernel<
+//         problemSize,
+//         elemCount,
+//         blockSize
+//     > coulombKernel;
     for ( std::size_t s = 0; s < steps; ++s)
     {
+
+        /* pair-wise with local particles */
+        alpaka::kernel::exec< Acc > (
+            queue,
+            workdiv,
+            updateKernel,
+            mirrowView,
+            mirrowView,
+            ts
+        );
+
+        chrono.printAndReset("Update kernel:       ");
+
+        /* pair-wise with remote particles */
+        for (dart_unit_t unit_it = 1; unit_it < size; ++unit_it)
+        {
+            dart_unit_t remote = (myid + unit_it) % size;
+
+            // get remote local block into remoteHostView
+            auto remote_begin = particles.begin() + (remote * problemSize);
+            auto remote_end   = remote_begin + problemSize;
+            auto target_begin = reinterpret_cast<particle*>(alpaka::mem::view::getPtrNative(remoteHostView.blob[0].buffer));
+            dash::copy(remote_begin, remote_end, target_begin); // copy particles from remote
+
+            chrono.printAndReset("Copy from remote:    ");
+
+            alpakaMemCopy( remoteDevView, remoteHostView, userDomainSize, queue );
+
+            alpaka::kernel::exec< Acc > (
+                queue,
+                workdiv,
+                updateKernel,
+                mirrowView,
+                remoteMirrowView,
+                ts
+            );
+
+            chrono.printAndReset("Update remote kernel:");
+
+        }
 
         // call harmonic kernel
         alpaka::kernel::exec<Acc>(
@@ -731,15 +942,15 @@ int main(int argc,char * * argv)
         );
         chrono.printAndReset("Harmonic kernel:         ");
 
-        // call coulomb kernel
-        alpaka::kernel::exec<Acc>(
-            queue,
-            workdiv,
-            coulombKernel,
-            mirrowView,
-            ts
-        );
-        chrono.printAndReset("Coulomb kernel:         ");
+//         // call coulomb kernel
+//         alpaka::kernel::exec<Acc>(
+//             queue,
+//             workdiv,
+//             coulombKernel,
+//             mirrowView,
+//             ts
+//         );
+//         chrono.printAndReset("Coulomb kernel:         ");
 
         // move kernel
         alpaka::kernel::exec<Acc>(
@@ -760,10 +971,12 @@ int main(int argc,char * * argv)
 
             particles.barrier();
 
-        // dump data to file, print first and last step and in given interval
-        if ( myid == 0 ){
-            if ( s == 0 || s % DATA_DUMP_STEPS == 0 || s == (steps - 1)  ){
 
+
+        // dump data to file, print first and last step and in given interval
+
+        if ( s == 0 || s % DATA_DUMP_STEPS == 0 || s == (steps - 1) ){
+            if ( myid == 0 ){
                 std::string i = std::to_string(s);
                 std::string fileName = "data";
                 fileName.append(i);
