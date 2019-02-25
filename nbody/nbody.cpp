@@ -34,8 +34,6 @@
 #include "Dummy.hpp"
 #include "Human.hpp"
 
-#include "TMDConstsPhysics.h"
-
 
 /* ******************************************************************
  *               Define relevant constants here                     *
@@ -63,6 +61,9 @@ constexpr Element rmin = 0; // position of potential minimum x=y=z=0
 
 constexpr Element rNull = 1e-6; // [m]
 constexpr Element rNullSquared = rNull*rNull; // [m]
+
+constexpr Element phys_c        = 299792458.;
+constexpr Element phys_emfactor = phys_c * phys_c * 1E-7;
 
 /* *************************************************************** */
 
@@ -249,9 +250,12 @@ struct MoveKernel
         {
             // F_i = hforce_i + cforce_i
             Element const F_i[3] = {
-                particles( pos )( dd::HForce(), dd::X() ) + particles( pos )( dd::CForce(), dd::X() ),
-                particles( pos )( dd::HForce(), dd::Y() ) + particles( pos )( dd::CForce(), dd::Y() ),
-                particles( pos )( dd::HForce(), dd::Z() ) + particles( pos )( dd::CForce(), dd::Z() )
+                particles( pos )( dd::HForce(), dd::X() ) +
+                    particles( pos )( dd::CForce(), dd::X() ),
+                particles( pos )( dd::HForce(), dd::Y() ) +
+                    particles( pos )( dd::CForce(), dd::Y() ),
+                particles( pos )( dd::HForce(), dd::Z() ) +
+                    particles( pos )( dd::CForce(), dd::Z() )
             };
 
             // F = m * a => d^2x/dt^2 = F(t,x,dx/dt) / m
@@ -411,7 +415,8 @@ struct CoulombKernel
 
                     // calculate coulomb force
                     if ( distCube > 0. ){
-                        forcefactor = _md_phys_emfactor * particleCharge * particleCharge / distCube;
+                        forcefactor = phys_emfactor * particleCharge *
+                            particleCharge / distCube;
 
                         forceX = forcefactor * d[0];
                         forceY = forcefactor * d[1];
@@ -624,13 +629,6 @@ int main(int argc,char * * argv)
     LLAMA_INDEPENDENT_DATA
     for (std::size_t i = 0; i < problemSize; ++i)
     {
-        // TODO:
-        //  1. initialization - ok
-        //  2. coulomb initialization - ok
-        //  3. calculate coulomb forces - ok
-        //  4. integrate harmonic forces (they are per particle, copy & paste integration - ok
-        //  3. cool laser integration
-
         // initialize position in X, Y, Z with random
         seed = distribution(generator);
         hostView(i)(dd::Pos(), dd::X()) = seed;
