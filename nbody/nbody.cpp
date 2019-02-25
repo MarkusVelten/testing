@@ -97,14 +97,14 @@ pos += v * dt
 
 namespace dd
 {
-    struct Pos {}
-    struct Vel {}
-    struct X {}
-    struct Y {}
-    struct Z {}
-    struct HForce {}
-    struct CForce {}
-    struct Mass {}
+    struct Pos {};
+    struct Vel {};
+    struct X {};
+    struct Y {};
+    struct Z {};
+    struct HForce {};
+    struct CForce {};
+    struct Mass {};
 }
 
 struct particle
@@ -126,7 +126,7 @@ struct particle
         Element x, y, z;
     } cForce;
     Element mass;
-}
+};
 
 using Particle = llama::DS<
     llama::DE< dd::Pos, llama::DS< //position
@@ -173,7 +173,7 @@ pPInteraction(
         remoteP( dd::Pos(), dd::Y() ),
         localP( dd::Pos(), dd::Z() ) -
         remoteP( dd::Pos(), dd::Z() )
-    }
+    };
 
     Element distSqr = d[0] * d[0] + d[1] * d[1] + d[2] * d[2] + EPS2;
     Element distSixth = distSqr * distSqr * distSqr;
@@ -186,7 +186,7 @@ pPInteraction(
         d[0] * s * ts,
         d[1] * s * ts,
         d[2] * s * ts
-    }
+    };
 
     localP( dd::Vel(), dd::X() ) += v_d[0];
     localP( dd::Vel(), dd::Y() ) += v_d[1];
@@ -195,11 +195,6 @@ pPInteraction(
     Element forceX, forceY, forceZ, forcefactor;
 
     // calculate coulomb force
-
-//     remoteP( dd::CForce(), dd::X() ) = 0;
-//     remoteP( dd::CForce(), dd::Y() ) = 0;
-//     remoteP( dd::CForce(), dd::Z() ) = 0;
-
     if ( distCube > 0. ){
         forcefactor = phys_emfactor * particleCharge *
             particleCharge / distCube;
@@ -211,12 +206,32 @@ pPInteraction(
         localP( dd::CForce(), dd::X() )  += forceX;
         localP( dd::CForce(), dd::Y() )  += forceY;
         localP( dd::CForce(), dd::Z() )  += forceZ;
-
-//         remoteP( dd::CForce(), dd::X() ) -= forceX;
-//         remoteP( dd::CForce(), dd::Y() ) -= forceY;
-//         remoteP( dd::CForce(), dd::Z() ) -= forceZ;
-
     }
+}
+
+template<
+    typename T_VirtualDatum1
+>
+LLAMA_FN_HOST_ACC_INLINE
+auto
+cooling_linear(
+    T_VirtualDatum1&& vk, //self
+    Element const & vacc,
+    Element const & vmax
+)
+-> Element
+{
+    double restore = 1e-19; // [ C*V/m*s/m ]
+
+    Element dv = vk - vmax;
+
+    if ( vacc < 0. )
+        return -restore * dv;
+    else if ( (dv < 0.) && (dv > -vacc) )
+        return +restore * (dv+vacc);
+    else if ( (dv > 0.) && (dv < +vacc) )
+        return -restore * (dv-vacc);
+    return 0.0;
 }
 
 template<
@@ -247,8 +262,8 @@ struct BlockSharedMemoryAllocator
     -> decltype( T_Factory::allocView( mapping, acc ) )
     {
         return T_Factory::allocView( mapping, acc );
-    }
-}
+    };
+};
 
 template<
     typename T_Acc,
@@ -280,8 +295,8 @@ struct BlockSharedMemoryAllocator<
     -> decltype( T_Factory::allocView( mapping ) )
     {
         return T_Factory::allocView( mapping );
-    }
-}
+    };
+};
 
 template<
     std::size_t problemSize,
@@ -373,7 +388,7 @@ struct UpdateKernel
                     );
         }
     }
-}
+};
 
 template<
     std::size_t problemSize,
@@ -407,22 +422,48 @@ struct MoveKernel
         LLAMA_INDEPENDENT_DATA
         for ( auto pos = start; pos < end; ++pos )
         {
+
+            // cooling laser force
+            Element lforce[3] = {
+                cooling_linear( particles( pos )( dd::Pos(), dd::X()),
+                                -20,
+                                -10) +
+                cooling_linear( particles( pos )( dd::Pos(), dd::X()),
+                                20,
+                                10),
+                cooling_linear( particles( pos )( dd::Pos(), dd::Y()),
+                                -20,
+                                -10) +
+                cooling_linear( particles( pos )( dd::Pos(), dd::Y()),
+                                -20,
+                                -10),
+                cooling_linear( particles( pos )( dd::Pos(), dd::Y()),
+                                -20,
+                                -10) +
+                cooling_linear( particles( pos )( dd::Pos(), dd::Y()),
+                                -20,
+                                -10)
+            };
+
             // F_i = hforce_i + cforce_i
             Element const F_i[3] = {
                 particles( pos )( dd::HForce(), dd::X() ) +
-                    particles( pos )( dd::CForce(), dd::X() ),
+                    particles( pos )( dd::CForce(), dd::X() ) +
+                    lforce[1],
                 particles( pos )( dd::HForce(), dd::Y() ) +
-                    particles( pos )( dd::CForce(), dd::Y() ),
+                    particles( pos )( dd::CForce(), dd::Y() ) +
+                    lforce[2],
                 particles( pos )( dd::HForce(), dd::Z() ) +
-                    particles( pos )( dd::CForce(), dd::Z() )
-            }
+                    particles( pos )( dd::CForce(), dd::Z() ) +
+                    lforce[3]
+            };
 
             // F = m * a => d^2x/dt^2 = F(t,x,dx/dt) / m
             Element const a[3] = {
                 F_i[0] / particleMass,
                 F_i[1] / particleMass,
                 F_i[2] / particleMass,
-            }
+            };
 
             // v += a * dt
             particles( pos )( dd::Vel(), dd::X() ) +=
@@ -448,7 +489,7 @@ struct MoveKernel
 
         }
     }
-}
+};
 
 // calculate harmonic particle interaction
 template<
@@ -494,7 +535,7 @@ struct HarmonicKernel
                 ( particles( hForce )( dd::Pos(), dd::Z()) - rmin );
         }
     }
-}
+};
 
 // compute the coulomb forces
 
@@ -601,7 +642,7 @@ struct CoulombKernel
 //             }
 //         }
     }
-}
+};
 
 template<
     typename T_Acc,
@@ -612,7 +653,7 @@ struct ThreadsElemsDistribution
 {
     static constexpr std::size_t elemCount = blockSize;
     static constexpr std::size_t threadCount = 1u;
-}
+};
 
 #ifdef ALPAKA_ACC_GPU_CUDA_ENABLED
     template<
@@ -629,7 +670,7 @@ struct ThreadsElemsDistribution
     {
         static constexpr std::size_t elemCount = 1u;
         static constexpr std::size_t threadCount = blockSize;
-    }
+    };
 #endif
 
 #ifdef ALPAKA_ACC_CPU_B_SEQ_T_OMP2_ENABLED
@@ -648,7 +689,7 @@ struct ThreadsElemsDistribution
         static constexpr std::size_t elemCount =
             ( blockSize + hardwareThreads - 1u ) / hardwareThreads;
         static constexpr std::size_t threadCount = hardwareThreads;
-    }
+    };
 #endif
 
 template<
@@ -671,7 +712,7 @@ struct PassThroughAllocator
     {
         return reinterpret_cast<BlobType>(pointer);
     }
-}
+};
 
 
 int main(int argc,char * * argv)
@@ -728,7 +769,7 @@ int main(int argc,char * * argv)
 
     // LLAMA
     using UserDomain = llama::UserDomain< 1 >;
-    const UserDomain userDomainSize{ problemSize }
+    const UserDomain userDomainSize{ problemSize };
 
     using Mapping = llama::mapping::SoA<
         UserDomain,
@@ -868,7 +909,7 @@ int main(int argc,char * * argv)
         blocks,
         threads,
         elems
-    }
+    };
 
     // copy hostView to devView
     UpdateKernel<
