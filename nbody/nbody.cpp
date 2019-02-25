@@ -119,10 +119,6 @@ struct particle
     struct
     {
         Element x, y, z;
-    } hForce;
-    struct
-    {
-        Element x, y, z;
     } cForce;
     Element mass;
 };
@@ -134,11 +130,6 @@ using Particle = llama::DS<
         llama::DE< dd::Z, Element >
     > >,
     llama::DE< dd::Vel,llama::DS< //velocity
-        llama::DE< dd::X, Element >,
-        llama::DE< dd::Y, Element >,
-        llama::DE< dd::Z, Element >
-    > >,
-    llama::DE< dd::HForce,llama::DS< //harmonic forces
         llama::DE< dd::X, Element >,
         llama::DE< dd::Y, Element >,
         llama::DE< dd::Z, Element >
@@ -423,7 +414,7 @@ struct SingleParticleKernel
         {
 
             // cooling laser force
-            Element lforce[3] = {
+            Element lForce[3] = {
                 cooling_linear( particles( pos )( dd::Pos(), dd::X()),
                                 -20,
                                 -10) +
@@ -444,17 +435,29 @@ struct SingleParticleKernel
                                 -10)
             };
 
+            // harmonic forces
+            Element hForce[3] = {
+                particleCharge * ( -2.0 * voltage / rNullSquared) *
+                    ( particles( pos )( dd::Pos(), dd::X()) - rmin ),
+                particleCharge * ( -2.0 * voltage / rNullSquared) *
+                    ( particles( pos )( dd::Pos(), dd::Y()) - rmin ),
+                particleCharge * ( -2.0 * voltage / rNullSquared) *
+                    ( particles( pos )( dd::Pos(), dd::Z()) - rmin )
+
+            };
+
+
             // F_i = hforce_i + cforce_i
             Element const F_i[3] = {
-                particles( pos )( dd::HForce(), dd::X() ) +
-                    particles( pos )( dd::CForce(), dd::X() ) +
-                    lforce[1],
-                particles( pos )( dd::HForce(), dd::Y() ) +
-                    particles( pos )( dd::CForce(), dd::Y() ) +
-                    lforce[2],
-                particles( pos )( dd::HForce(), dd::Z() ) +
-                    particles( pos )( dd::CForce(), dd::Z() ) +
-                    lforce[3]
+                particles( pos )( dd::CForce(), dd::X() ) +
+                    lForce[0] +
+                    hForce[0],
+                particles( pos )( dd::CForce(), dd::Y() ) +
+                    lForce[1] +
+                    hForce[1],
+                particles( pos )( dd::CForce(), dd::Z() ) +
+                    lForce[2] +
+                    hForce[2]
             };
 
             // F = m * a => d^2x/dt^2 = F(t,x,dx/dt) / m
@@ -486,52 +489,6 @@ struct SingleParticleKernel
             particles( pos )( dd::CForce(), dd::Z() )  = 0;
 
 
-        }
-    }
-};
-
-// calculate harmonic particle interaction
-template<
-    std::size_t problemSize,
-    std::size_t elems
->
-struct HarmonicKernel
-{
-    template<
-        typename T_Acc,
-        typename T_View
-    >
-    LLAMA_FN_HOST_ACC_INLINE
-    void operator()(
-        T_Acc const &acc,
-        T_View particles,
-        Element ts
-    ) const
-    {
-        auto threadIndex  = alpaka::idx::getIdx<
-            alpaka::Grid,
-            alpaka::Threads
-        >( acc )[ 0u ];
-
-        auto const start = threadIndex * elems;
-        auto const   end = alpaka::math::min(
-            acc,
-            (threadIndex + 1) * elems,
-            problemSize
-        );
-
-        LLAMA_INDEPENDENT_DATA
-        for ( auto hForce = start; hForce < end; ++hForce )
-        {
-            particles( hForce )( dd::HForce(), dd::X() ) =
-                particleCharge * ( -2.0 * voltage / rNullSquared) *
-                ( particles( hForce )( dd::Pos(), dd::X()) - rmin );
-            particles( hForce )( dd::HForce(), dd::Y() ) =
-                particleCharge * ( -2.0 * voltage / rNullSquared) *
-                ( particles( hForce )( dd::Pos(), dd::Y()) - rmin );
-            particles( hForce )( dd::HForce(), dd::Z() ) =
-                particleCharge * ( -2.0 * voltage / rNullSquared) *
-                ( particles( hForce )( dd::Pos(), dd::Z()) - rmin );
         }
     }
 };
@@ -743,11 +700,6 @@ int main(int argc,char * * argv)
         hostView(i)(dd::Vel(), dd::Y()) = 0;
         hostView(i)(dd::Vel(), dd::Z()) = 0;
 
-        // initialize harmonic force in X, Y, Z with zero
-        hostView(i)(dd::HForce(), dd::X()) = 0;
-        hostView(i)(dd::HForce(), dd::Y()) = 0;
-        hostView(i)(dd::HForce(), dd::Z()) = 0;
-
         // initialize coulomb force in X, Y, Z with zero
         hostView(i)(dd::CForce(), dd::X()) = 0;
         hostView(i)(dd::CForce(), dd::Y()) = 0;
@@ -813,15 +765,7 @@ int main(int argc,char * * argv)
         problemSize,
         elemCount
     > SingleParticleKernel;
-    HarmonicKernel<
-        problemSize,
-        elemCount
-    > harmonicKernel;
-//     CoulombKernel<
-//         problemSize,
-//         elemCount,
-//         blockSize
-//     > coulombKernel;
+
     for ( std::size_t s = 0; s < steps; ++s)
     {
 
@@ -864,16 +808,6 @@ int main(int argc,char * * argv)
             chrono.printAndReset("Update remote kernel:");
 
         }
-
-        // call harmonic kernel
-        alpaka::kernel::exec<Acc>(
-            queue,
-            workdiv,
-            harmonicKernel,
-            mirrowView,
-            ts
-        );
-        chrono.printAndReset("Harmonic kernel:         ");
 
         // move kernel
         alpaka::kernel::exec<Acc>(
