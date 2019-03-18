@@ -39,14 +39,14 @@
  *               Define relevant constants here                     *
  ***************************************************************** */
 
-#define NBODY_PROBLEM_SIZE 1000
+#define NBODY_PROBLEM_SIZE 300
 #define NBODY_BLOCK_SIZE 256
 #define NBODY_STEPS 100000
 #define DATA_DUMP_STEPS 200 // write data to file every N steps
 
-using Element = double; // change to double if needed
+using Element = float; // change to double if needed
 
-constexpr Element EPS2 = 0.01;
+constexpr Element EPS2 = 1e-10;
 
 constexpr Element ts = 1e-7; // timestep in [s]
 
@@ -165,8 +165,8 @@ pPInteraction(
         remoteP( dd::Pos(), dd::Z() )
     };
 
-    //Element distSqr = d[0] * d[0] + d[1] * d[1] + d[2] * d[2] + EPS2;
-    Element distSqr = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+    Element distSqr = d[0] * d[0] + d[1] * d[1] + d[2] * d[2] + EPS2;
+    //Element distSqr = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
     Element distSixth = distSqr * distSqr * distSqr;
     Element invDistCube = 1.0f / sqrtf(distSixth);
     Element dist = sqrt(distSqr);
@@ -757,75 +757,23 @@ int main(int argc,char * * argv)
         problemSize,
         elemCount,
         blockSize
-    > ParticleInteractionKernel;
+    > particleInteractionKernel;
     SingleParticleKernel<
         problemSize,
         elemCount
-    > SingleParticleKernel;
+    > singleParticleKernel;
 
+    std::cout << "Progress:\n";
+    std::cout << "0%.....................25%...................100%\n";
+    Element progress;
+    progress = 0.02;
     for ( std::size_t s = 0; s < steps; ++s)
     {
-
-        /* pair-wise with local particles */
-        alpaka::kernel::exec< Acc > (
-            queue,
-            workdiv,
-            ParticleInteractionKernel,
-            mirrowView,
-            mirrowView,
-            ts
-        );
-
-        chrono.printAndReset("Update kernel:       ");
-
-        /* pair-wise with remote particles */
-        for (dart_unit_t unit_it = 1; unit_it < size; ++unit_it)
-        {
-            dart_unit_t remote = (myid + unit_it) % size;
-
-            // get remote local block into remoteHostView
-            auto remote_begin = particles.begin() + (remote * problemSize);
-            auto remote_end   = remote_begin + problemSize;
-            auto target_begin = reinterpret_cast<particle*>(alpaka::mem::view::getPtrNative(remoteHostView.blob[0].buffer));
-            dash::copy(remote_begin, remote_end, target_begin); // copy particles from remote
-
-            chrono.printAndReset("Copy from remote:    ");
-
-            alpakaMemCopy( remoteDevView, remoteHostView, userDomainSize, queue );
-
-            alpaka::kernel::exec< Acc > (
-                queue,
-                workdiv,
-                ParticleInteractionKernel,
-                mirrowView,
-                remoteMirrowView,
-                ts
-            );
-
-            chrono.printAndReset("Update remote kernel:");
-
+        //std::cout<<(Element)s/(Element)steps<<std::endl;
+        if ( ((Element)s/(Element)steps)>=progress ){
+            progress+=0.02;
+            std::cout << "."<<std::flush;
         }
-
-        // move kernel
-        alpaka::kernel::exec<Acc>(
-            queue,
-            workdiv,
-            SingleParticleKernel,
-            mirrowView,
-            ts
-        );
-        chrono.printAndReset("Move kernel:         ");
-
-        dummy( static_cast<void*>( mirrowView.blob[0] ) );
-
-            alpaka::mem::view::copy(queue,
-                hostPlain,
-                devView.blob[0].buffer,
-                problemSize * llama::SizeOf<Particle>::value);
-
-            particles.barrier();
-
-
 
         // dump data to file, print first and last step and in given interval
 
@@ -850,7 +798,69 @@ int main(int argc,char * * argv)
                 myfile.close();
             }
         }
+
+        /* pair-wise with local particles */
+        alpaka::kernel::exec< Acc > (
+            queue,
+            workdiv,
+            particleInteractionKernel,
+            mirrowView,
+            mirrowView,
+            ts
+        );
+
+        //chrono.printAndReset("Update kernel:       ");
+
+        /* pair-wise with remote particles */
+        for (dart_unit_t unit_it = 1; unit_it < size; ++unit_it)
+        {
+            dart_unit_t remote = (myid + unit_it) % size;
+
+            // get remote local block into remoteHostView
+            auto remote_begin = particles.begin() + (remote * problemSize);
+            auto remote_end   = remote_begin + problemSize;
+            auto target_begin = reinterpret_cast<particle*>(alpaka::mem::view::getPtrNative(remoteHostView.blob[0].buffer));
+            dash::copy(remote_begin, remote_end, target_begin); // copy particles from remote
+
+            //chrono.printAndReset("Copy from remote:    ");
+
+            alpakaMemCopy( remoteDevView, remoteHostView, userDomainSize, queue );
+
+            alpaka::kernel::exec< Acc > (
+                queue,
+                workdiv,
+                particleInteractionKernel,
+                mirrowView,
+                remoteMirrowView,
+                ts
+            );
+
+            //chrono.printAndReset("Update remote kernel:");
+
+        }
+
+        // move kernel
+        alpaka::kernel::exec<Acc>(
+            queue,
+            workdiv,
+            singleParticleKernel,
+            mirrowView,
+            ts
+        );
+        //chrono.printAndReset("Move kernel:         ");
+
+        dummy( static_cast<void*>( mirrowView.blob[0] ) );
+
+            alpaka::mem::view::copy(queue,
+                hostPlain,
+                devView.blob[0].buffer,
+                problemSize * llama::SizeOf<Particle>::value);
+
+            particles.barrier();
+
     }
+
+    std::cout<<std::endl; // at the end of progress bar
 
     chrono.printAndReset("Copy D->H");
 
