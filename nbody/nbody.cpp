@@ -39,7 +39,7 @@
  *               Define relevant constants here                     *
  ***************************************************************** */
 
-#define NBODY_PROBLEM_SIZE 1000
+#define NBODY_PROBLEM_SIZE 1500
 #define NBODY_BLOCK_SIZE 256
 #define NBODY_STEPS 100000
 #define DATA_DUMP_STEPS 200 // write data to file every N steps
@@ -763,14 +763,18 @@ int main(int argc,char * * argv)
         elemCount
     > singleParticleKernel;
 
-    std::cout << "Progress:\n";
-    std::cout << "0%.....................50%...................100%\n";
+    // initialize progress bar
     Element progress;
-    progress = 0.02;
+    if ( myid == 0 ){
+        std::cout << "Progress:\n";
+        std::cout << "0%.....................50%...................100%\n";
+        progress = 0.02;
+    }
+
     for ( std::size_t s = 0; s < steps; ++s)
     {
         //std::cout<<(Element)s/(Element)steps<<std::endl;
-        if ( ((Element)s/(Element)steps)>=progress ){
+        if ( ((Element)s/(Element)steps)>=progress && myid == 0 ){
             progress+=0.02;
             std::cout << "."<<std::flush;
         }
