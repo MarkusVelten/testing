@@ -41,10 +41,10 @@
 
 #define NBODY_PROBLEM_SIZE 1000
 #define NBODY_BLOCK_SIZE 256
-#define NBODY_STEPS 1000000
-#define DATA_DUMP_STEPS 100 // write data to file every N steps
+#define NBODY_STEPS 100000
+#define DATA_DUMP_STEPS 200 // write data to file every N steps
 
-using Element = float; // change to double if needed
+using Element = double; // change to double if needed
 
 constexpr Element EPS2 = 0.01;
 
@@ -165,7 +165,8 @@ pPInteraction(
         remoteP( dd::Pos(), dd::Z() )
     };
 
-    Element distSqr = d[0] * d[0] + d[1] * d[1] + d[2] * d[2] + EPS2;
+    //Element distSqr = d[0] * d[0] + d[1] * d[1] + d[2] * d[2] + EPS2;
+    Element distSqr = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
     Element distSixth = distSqr * distSqr * distSqr;
     Element invDistCube = 1.0f / sqrtf(distSixth);
     Element dist = sqrt(distSqr);
@@ -182,20 +183,16 @@ pPInteraction(
     localP( dd::Vel(), dd::Y() ) += v_d[1];
     localP( dd::Vel(), dd::Z() ) += v_d[2];
 
-    Element forceX, forceY, forceZ, forcefactor;
+    Element forcefactor;
 
     // calculate coulomb force
     if ( distCube > 0. ){
         forcefactor = phys_emfactor * particleCharge *
             particleCharge / distCube;
 
-        forceX = forcefactor * d[0];
-        forceY = forcefactor * d[1];
-        forceZ = forcefactor * d[2];
-
-        localP( dd::CForce(), dd::X() )  += forceX;
-        localP( dd::CForce(), dd::Y() )  += forceY;
-        localP( dd::CForce(), dd::Z() )  += forceZ;
+        localP( dd::CForce(), dd::X() )  += forcefactor * d[0];
+        localP( dd::CForce(), dd::Y() )  += forcefactor * d[1];
+        localP( dd::CForce(), dd::Z() )  += forcefactor * d[2];
     }
 }
 
@@ -218,9 +215,9 @@ cooling_linear(
     if ( vacc < 0. )
         return -restore * dv;
     else if ( (dv < 0.) && (dv > -vacc) )
-        return +restore * (dv+vacc);
+        return +restore * (dv + vacc);
     else if ( (dv > 0.) && (dv < +vacc) )
-        return -restore * (dv-vacc);
+        return -restore * (dv - vacc);
     return 0.0;
 }
 
@@ -415,22 +412,22 @@ struct SingleParticleKernel
 
             // cooling laser force
             Element lForce[3] = {
-                cooling_linear( particles( pos )( dd::Pos(), dd::X()),
+                cooling_linear( particles( pos )( dd::Vel(), dd::X()),
                                 -20.,
                                 -10.) +
-                cooling_linear( particles( pos )( dd::Pos(), dd::X()),
+                cooling_linear( particles( pos )( dd::Vel(), dd::X()),
                                 20.,
                                 10.),
-                cooling_linear( particles( pos )( dd::Pos(), dd::Y()),
+                cooling_linear( particles( pos )( dd::Vel(), dd::Y()),
                                 -20.,
                                 -10.) +
-                cooling_linear( particles( pos )( dd::Pos(), dd::Y()),
+                cooling_linear( particles( pos )( dd::Vel(), dd::Y()),
                                 -20.,
                                 -10.),
-                cooling_linear( particles( pos )( dd::Pos(), dd::Y()),
+                cooling_linear( particles( pos )( dd::Vel(), dd::Z()),
                                 -20.,
                                 -10.) +
-                cooling_linear( particles( pos )( dd::Pos(), dd::Y()),
+                cooling_linear( particles( pos )( dd::Vel(), dd::Z()),
                                 -20.,
                                 -10.)
             };
