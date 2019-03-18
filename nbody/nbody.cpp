@@ -39,7 +39,7 @@
  *               Define relevant constants here                     *
  ***************************************************************** */
 
-#define NBODY_PROBLEM_SIZE 300
+#define NBODY_PROBLEM_SIZE 1000
 #define NBODY_BLOCK_SIZE 256
 #define NBODY_STEPS 100000
 #define DATA_DUMP_STEPS 200 // write data to file every N steps
@@ -764,7 +764,7 @@ int main(int argc,char * * argv)
     > singleParticleKernel;
 
     std::cout << "Progress:\n";
-    std::cout << "0%.....................25%...................100%\n";
+    std::cout << "0%.....................50%...................100%\n";
     Element progress;
     progress = 0.02;
     for ( std::size_t s = 0; s < steps; ++s)
