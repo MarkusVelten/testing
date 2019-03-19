@@ -39,16 +39,16 @@
  *               Define relevant constants here                     *
  ***************************************************************** */
 
-#define NBODY_PROBLEM_SIZE 400
+#define NBODY_PROBLEM_SIZE 800
 #define NBODY_BLOCK_SIZE 256
-#define NBODY_STEPS 20000
-#define DATA_DUMP_STEPS 200 // write data to file every N steps
+#define NBODY_STEPS 50000
+#define DATA_DUMP_STEPS 100 // write data to file every N steps
 
 using Element = float; // change to double if needed
 
 constexpr Element EPS2 = 1e-10;
 
-constexpr Element ts = 1e-7; // timestep in [s]
+constexpr Element ts = 1e-8; // timestep in [s]
 
 constexpr Element particleMass = 24*1.66053886E-27;// M(Mg)/A =  4.03594014⋅10−27 kg
 
@@ -120,7 +120,6 @@ struct particle
     {
         Element x, y, z;
     } cForce;
-//     Element mass;
 };
 
 using Particle = llama::DS<
@@ -139,7 +138,6 @@ using Particle = llama::DS<
         llama::DE< dd::Y, Element >,
         llama::DE< dd::Z, Element >
     > >
-//     llama::DE< dd::Mass, Element > //mass
 >;
 
 template<
@@ -165,24 +163,9 @@ pPInteraction(
         remoteP( dd::Pos(), dd::Z() )
     };
 
-    if ( d[0] != 0. || d[1] != 0. || d[2] != 0. ){
-    //Element distSqr = d[0] * d[0] + d[1] * d[1] + d[2] * d[2] + EPS2;
     Element distSqr = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
-    Element distSixth = distSqr * distSqr * distSqr;
-    Element invDistCube = 1.0f / sqrtf(distSixth);
     Element dist = sqrt(distSqr);
     Element distCube = distSqr * dist;
-    Element s = particleMass * invDistCube;
-
-    //Element const v_d[3] = {
-    //    d[0] * s * ts,
-    //    d[1] * s * ts,
-    //    d[2] * s * ts
-    //};
-
-    //localP( dd::Vel(), dd::X() ) += v_d[0];
-    //localP( dd::Vel(), dd::Y() ) += v_d[1];
-    //localP( dd::Vel(), dd::Z() ) += v_d[2];
 
     Element forcefactor;
 
@@ -194,7 +177,6 @@ pPInteraction(
         localP( dd::CForce(), dd::X() )  += forcefactor * d[0];
         localP( dd::CForce(), dd::Y() )  += forcefactor * d[1];
         localP( dd::CForce(), dd::Z() )  += forcefactor * d[2];
-    }
     }
 }
 
@@ -210,16 +192,16 @@ cooling_linear(
 )
 -> Element
 {
-    double restore = 1e-19; // [ C*V/m*s/m ]
+    Element restore = 1e-19; // [ C*V/m*s/m ]
 
     Element dv = vk - vmax;
 
     if ( vacc < 0. )
-        return -restore * dv;
-    else if ( (dv < 0.) && (dv > -vacc) )
+        return -1. * restore * dv;
+    else if ( (dv < 0.) && (dv > -1. * vacc) )
         return +restore * (dv + vacc);
     else if ( (dv > 0.) && (dv < +vacc) )
-        return -restore * (dv - vacc);
+        return -1. * restore * (dv - vacc);
     return 0.0;
 }
 
@@ -429,14 +411,14 @@ struct SingleParticleKernel
                                 -20.,
                                 -10.) +
                 cooling_linear( particles( pos )( dd::Vel(), dd::Y()),
-                                -20.,
-                                -10.),
+                                20.,
+                                10.),
                 cooling_linear( particles( pos )( dd::Vel(), dd::Z()),
                                 -20.,
                                 -10.) +
                 cooling_linear( particles( pos )( dd::Vel(), dd::Z()),
-                                -20.,
-                                -10.)
+                                20.,
+                                10.)
             };
 
             // harmonic forces
@@ -451,7 +433,7 @@ struct SingleParticleKernel
             };
 
 
-            // F_i = hforce_i + cforce_i
+            // F_i = hforce_i + cforce_i + lforce_i
             Element const F_i[3] = {
                 particles( pos )( dd::CForce(), dd::X() ) +
                     lForce[0] +
