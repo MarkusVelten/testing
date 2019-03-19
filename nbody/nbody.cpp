@@ -39,9 +39,9 @@
  *               Define relevant constants here                     *
  ***************************************************************** */
 
-#define NBODY_PROBLEM_SIZE 1500
+#define NBODY_PROBLEM_SIZE 400
 #define NBODY_BLOCK_SIZE 256
-#define NBODY_STEPS 100000
+#define NBODY_STEPS 20000
 #define DATA_DUMP_STEPS 200 // write data to file every N steps
 
 using Element = float; // change to double if needed
@@ -165,23 +165,24 @@ pPInteraction(
         remoteP( dd::Pos(), dd::Z() )
     };
 
-    Element distSqr = d[0] * d[0] + d[1] * d[1] + d[2] * d[2] + EPS2;
-    //Element distSqr = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+    if ( d[0] != 0. || d[1] != 0. || d[2] != 0. ){
+    //Element distSqr = d[0] * d[0] + d[1] * d[1] + d[2] * d[2] + EPS2;
+    Element distSqr = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
     Element distSixth = distSqr * distSqr * distSqr;
     Element invDistCube = 1.0f / sqrtf(distSixth);
     Element dist = sqrt(distSqr);
     Element distCube = distSqr * dist;
     Element s = particleMass * invDistCube;
 
-    Element const v_d[3] = {
-        d[0] * s * ts,
-        d[1] * s * ts,
-        d[2] * s * ts
-    };
+    //Element const v_d[3] = {
+    //    d[0] * s * ts,
+    //    d[1] * s * ts,
+    //    d[2] * s * ts
+    //};
 
-    localP( dd::Vel(), dd::X() ) += v_d[0];
-    localP( dd::Vel(), dd::Y() ) += v_d[1];
-    localP( dd::Vel(), dd::Z() ) += v_d[2];
+    //localP( dd::Vel(), dd::X() ) += v_d[0];
+    //localP( dd::Vel(), dd::Y() ) += v_d[1];
+    //localP( dd::Vel(), dd::Z() ) += v_d[2];
 
     Element forcefactor;
 
@@ -193,6 +194,7 @@ pPInteraction(
         localP( dd::CForce(), dd::X() )  += forcefactor * d[0];
         localP( dd::CForce(), dd::Y() )  += forcefactor * d[1];
         localP( dd::CForce(), dd::Z() )  += forcefactor * d[2];
+    }
     }
 }
 
@@ -339,6 +341,11 @@ struct ParticleInteractionKernel
             alpaka::Threads
         >( acc )[ 0u ];
 
+        auto threadBlockIndex  = alpaka::idx::getIdx<
+            alpaka::Block,
+            alpaka::Threads
+        >( acc )[ 0u ];
+
         auto const start = threadIndex * elems;
         auto const   end = alpaka::math::min(
             acc,
@@ -346,7 +353,7 @@ struct ParticleInteractionKernel
             problemSize
         );
         LLAMA_INDEPENDENT_DATA
-        for ( std::size_t b = 0; b < problemSize / blockSize; ++b )
+        for ( std::size_t b = 0; b < ( problemSize + blockSize -1 ) / blockSize; ++b )
         {
             auto const start2 = b * blockSize;
             auto const   end2 = alpaka::math::min(
@@ -358,10 +365,10 @@ struct ParticleInteractionKernel
             LLAMA_INDEPENDENT_DATA
             for (
                 auto pos2 = decltype(end2)(0);
-                pos2 + threadIndex < end2;
+                pos2 + threadBlockIndex < end2;
                 pos2 += threads
             )
-                temp(pos2 + threadIndex) = remoteParticles( start2 + pos2 + threadIndex );
+                temp(pos2 + threadBlockIndex) = remoteParticles( start2 + pos2 + threadBlockIndex );
 
             // compute loop
             LLAMA_INDEPENDENT_DATA
@@ -674,7 +681,7 @@ int main(int argc,char * * argv)
     std::default_random_engine generator;
     std::normal_distribution< Element > distribution(
         Element( 0 ), // mean
-        Element( 1e-6 )  // stddev
+        Element( 5e-4 )  // stddev
     );
     // TODO: set 1 to sigma from TMDUtils.cpp
     // TODO: initialize vel with that sigma
