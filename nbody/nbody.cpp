@@ -39,7 +39,7 @@
  *               Define relevant constants here                     *
  ***************************************************************** */
 
-#define NBODY_PROBLEM_SIZE 1000
+#define NBODY_PROBLEM_SIZE 257
 #define NBODY_BLOCK_SIZE 256
 #define NBODY_STEPS 200000
 #define DATA_DUMP_STEPS 100 // write data to file every N steps
@@ -103,7 +103,6 @@ namespace dd
     struct Z {};
     struct HForce {};
     struct CForce {};
-//     struct Mass {};
 }
 
 struct particle
@@ -192,7 +191,7 @@ cooling_linear(
 )
 -> Element
 {
-    Element restore = 1e-19; // [ C*V/m*s/m ]
+    Element restore = 1e-20; // [ C*V/m*s/m ]
 
     Element dv = vk - vmax;
 
@@ -202,7 +201,7 @@ cooling_linear(
         return +restore * (dv + vacc);
     else if ( (dv > 0.) && (dv < +vacc) )
         return -restore * (dv - vacc);
-    return 0.0;
+    else return 0.0;
 }
 
 template<
@@ -492,6 +491,7 @@ struct SingleParticleKernel
                 particles( pos )( dd::Vel(), dd::Z() ) += 
                     0.5 * ts * a[2];
             }
+            // verlet-integration part 2
             if ( verletStep == 1 ){
                 particles( pos )( dd::Vel(), dd::X() ) += 
                     0.5 * ts * a[0];
@@ -796,7 +796,7 @@ int main(int argc,char * * argv)
     for ( std::size_t s = 0; s < steps; ++s)
     {
         //std::cout<<(Element)s/(Element)steps<<std::endl;
-        if ( ((Element)s/(Element)steps)>=progress && myid == 0 ){
+        if ( ( (Element)s/(Element)steps ) >= progress && myid == 0 ){
             progress+=0.02;
             std::cout << "."<<std::flush;
         }
