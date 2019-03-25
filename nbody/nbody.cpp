@@ -39,9 +39,9 @@
  *               Define relevant constants here                     *
  ***************************************************************** */
 
-#define NBODY_PROBLEM_SIZE 800
+#define NBODY_PROBLEM_SIZE 1000
 #define NBODY_BLOCK_SIZE 256
-#define NBODY_STEPS 50000
+#define NBODY_STEPS 200000
 #define DATA_DUMP_STEPS 100 // write data to file every N steps
 
 using Element = float; // change to double if needed
@@ -197,11 +197,11 @@ cooling_linear(
     Element dv = vk - vmax;
 
     if ( vacc < 0. )
-        return -1. * restore * dv;
-    else if ( (dv < 0.) && (dv > -1. * vacc) )
+        return -restore * dv;
+    else if ( (dv < 0.) && (dv > -vacc) )
         return +restore * (dv + vacc);
     else if ( (dv > 0.) && (dv < +vacc) )
-        return -1. * restore * (dv - vacc);
+        return -restore * (dv - vacc);
     return 0.0;
 }
 
@@ -380,7 +380,8 @@ struct SingleParticleKernel
     void operator()(
         T_Acc const &acc,
         T_View particles,
-        Element ts
+        Element ts,
+        std::size_t verletStep
     ) const
     {
         auto threadIndex  = alpaka::idx::getIdx<
@@ -454,20 +455,51 @@ struct SingleParticleKernel
             };
 
             // v += a * dt
-            particles( pos )( dd::Vel(), dd::X() ) +=
-                a[0] * ts; // ts = timestep
-            particles( pos )( dd::Vel(), dd::Y() ) +=
-                a[1] * ts;
-            particles( pos )( dd::Vel(), dd::Z() ) +=
-                a[2] * ts;
+            //particles( pos )( dd::Vel(), dd::X() ) +=
+            //    a[0] * ts; // ts = timestep
+            //particles( pos )( dd::Vel(), dd::Y() ) +=
+            //    a[1] * ts;
+            //particles( pos )( dd::Vel(), dd::Z() ) +=
+            //    a[2] * ts;
 
             // pos += v * dt
-            particles( pos )( dd::Pos(), dd::X() ) +=
-                particles( pos )( dd::Vel(), dd::X() ) * ts; // ts = timestep
-            particles( pos )( dd::Pos(), dd::Y() ) +=
-                particles( pos )( dd::Vel(), dd::Y() ) * ts;
-            particles( pos )( dd::Pos(), dd::Z() ) +=
-                particles( pos )( dd::Vel(), dd::Z() ) * ts;
+            //particles( pos )( dd::Pos(), dd::X() ) +=
+            //    particles( pos )( dd::Vel(), dd::X() ) * ts; // ts = timestep
+            //particles( pos )( dd::Pos(), dd::Y() ) +=
+            //    particles( pos )( dd::Vel(), dd::Y() ) * ts;
+            //particles( pos )( dd::Pos(), dd::Z() ) +=
+            //    particles( pos )( dd::Vel(), dd::Z() ) * ts;
+
+            // verlet-integration part 1
+            if ( verletStep == 0 ){
+                particles( pos )( dd::Pos(), dd::X() ) +=
+                    ts *
+                    ( particles( pos )( dd::Vel(), dd::X() ) +
+                      0.5 * ts * a[0] );
+                particles( pos )( dd::Pos(), dd::Y() ) +=
+                    ts *
+                    ( particles( pos )( dd::Vel(), dd::Y() ) +
+                      0.5 * ts * a[1] );
+                particles( pos )( dd::Pos(), dd::Z() ) +=
+                    ts *
+                    ( particles( pos )( dd::Vel(), dd::Z() ) +
+                      0.5 * ts * a[2] );
+
+                particles( pos )( dd::Vel(), dd::X() ) += 
+                    0.5 * ts * a[0];
+                particles( pos )( dd::Vel(), dd::Y() ) += 
+                    0.5 * ts * a[1];
+                particles( pos )( dd::Vel(), dd::Z() ) += 
+                    0.5 * ts * a[2];
+            }
+            if ( verletStep == 1 ){
+                particles( pos )( dd::Vel(), dd::X() ) += 
+                    0.5 * ts * a[0];
+                particles( pos )( dd::Vel(), dd::Y() ) += 
+                    0.5 * ts * a[1];
+                particles( pos )( dd::Vel(), dd::Z() ) += 
+                    0.5 * ts * a[2];
+            }
 
             // reset coulomb forces
             particles( pos )( dd::CForce(), dd::X() )  = 0;
@@ -760,6 +792,7 @@ int main(int argc,char * * argv)
         progress = 0.02;
     }
 
+    std::size_t verletStep = 0;
     for ( std::size_t s = 0; s < steps; ++s)
     {
         //std::cout<<(Element)s/(Element)steps<<std::endl;
@@ -832,13 +865,15 @@ int main(int argc,char * * argv)
 
         }
 
+        verletStep = s%2;
         // move kernel
         alpaka::kernel::exec<Acc>(
             queue,
             workdiv,
             singleParticleKernel,
             mirrowView,
-            ts
+            ts,
+            verletStep
         );
         //chrono.printAndReset("Move kernel:         ");
 
