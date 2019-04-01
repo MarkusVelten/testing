@@ -2,6 +2,7 @@
 #include <utility>
 #include <string>
 #include <fstream>
+#include <math.h>
 
 #include <libdash.h> // requires MPI, allows easy access to data containers
 
@@ -39,7 +40,7 @@
  *               Define relevant constants here                     *
  ***************************************************************** */
 
-#define NBODY_PROBLEM_SIZE 257
+#define NBODY_PROBLEM_SIZE 512
 #define NBODY_BLOCK_SIZE 256
 #define NBODY_STEPS 200000
 #define DATA_DUMP_STEPS 100 // write data to file every N steps
@@ -186,22 +187,19 @@ LLAMA_FN_HOST_ACC_INLINE
 auto
 cooling_linear(
     T_VirtualDatum1&& vk, //self
-    Element const & vacc,
-    Element const & vmax
+    Element const & ts
 )
 -> Element
 {
-    Element restore = 1e-20; // [ C*V/m*s/m ]
+    Element p=0.1; // 10%
 
-    Element dv = vk - vmax;
+    Element dv = vk;
 
-    if ( vacc < 0. )
-        return -restore * dv;
-    else if ( (dv < 0.) && (dv > -vacc) )
-        return +restore * (dv + vacc);
-    else if ( (dv > 0.) && (dv < +vacc) )
-        return -restore * (dv - vacc);
-    else return 0.0;
+    Element ln1p = log(1+p)/log(exp(1.0));
+    
+    Element restore = -ln1p/ts * particleMass;
+
+    return restore * dv;
 }
 
 template<
@@ -398,27 +396,14 @@ struct SingleParticleKernel
         LLAMA_INDEPENDENT_DATA
         for ( auto pos = start; pos < end; ++pos )
         {
-
-            // cooling laser force
+            // cooling laser
             Element lForce[3] = {
                 cooling_linear( particles( pos )( dd::Vel(), dd::X()),
-                                -20.,
-                                -10.) +
-                cooling_linear( particles( pos )( dd::Vel(), dd::X()),
-                                20.,
-                                10.),
+                                ts), 
                 cooling_linear( particles( pos )( dd::Vel(), dd::Y()),
-                                -20.,
-                                -10.) +
-                cooling_linear( particles( pos )( dd::Vel(), dd::Y()),
-                                20.,
-                                10.),
+                                ts),
                 cooling_linear( particles( pos )( dd::Vel(), dd::Z()),
-                                -20.,
-                                -10.) +
-                cooling_linear( particles( pos )( dd::Vel(), dd::Z()),
-                                20.,
-                                10.)
+                                ts),
             };
 
             // harmonic forces
@@ -431,7 +416,6 @@ struct SingleParticleKernel
                     ( particles( pos )( dd::Pos(), dd::Z()) - rmin )
 
             };
-
 
             // F_i = hforce_i + cforce_i + lforce_i
             Element const F_i[3] = {
@@ -452,22 +436,6 @@ struct SingleParticleKernel
                 F_i[1] / particleMass,
                 F_i[2] / particleMass,
             };
-
-            // v += a * dt
-            //particles( pos )( dd::Vel(), dd::X() ) +=
-            //    a[0] * ts; // ts = timestep
-            //particles( pos )( dd::Vel(), dd::Y() ) +=
-            //    a[1] * ts;
-            //particles( pos )( dd::Vel(), dd::Z() ) +=
-            //    a[2] * ts;
-
-            // pos += v * dt
-            //particles( pos )( dd::Pos(), dd::X() ) +=
-            //    particles( pos )( dd::Vel(), dd::X() ) * ts; // ts = timestep
-            //particles( pos )( dd::Pos(), dd::Y() ) +=
-            //    particles( pos )( dd::Vel(), dd::Y() ) * ts;
-            //particles( pos )( dd::Pos(), dd::Z() ) +=
-            //    particles( pos )( dd::Vel(), dd::Z() ) * ts;
 
             // verlet-integration part 1
             if ( verletStep == 0 ){
