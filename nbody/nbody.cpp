@@ -40,9 +40,9 @@
  *               Define relevant constants here                     *
  ***************************************************************** */
 
-#define NBODY_PROBLEM_SIZE 512
+#define NBODY_PROBLEM_SIZE 800
 #define NBODY_BLOCK_SIZE 256
-#define NBODY_STEPS 200000
+#define NBODY_STEPS 100000
 #define DATA_DUMP_STEPS 100 // write data to file every N steps
 
 using Element = float; // change to double if needed
@@ -104,6 +104,7 @@ namespace dd
     struct Z {};
     struct HForce {};
     struct CForce {};
+    struct LForce {};
 }
 
 struct particle
@@ -119,7 +120,15 @@ struct particle
     struct
     {
         Element x, y, z;
+    } hForce;
+    struct
+    {
+        Element x, y, z;
     } cForce;
+    struct
+    {
+        Element x, y, z;
+    } lForce;
 };
 
 using Particle = llama::DS<
@@ -133,7 +142,17 @@ using Particle = llama::DS<
         llama::DE< dd::Y, Element >,
         llama::DE< dd::Z, Element >
     > >,
+    llama::DE< dd::HForce,llama::DS< //harmonic forces
+        llama::DE< dd::X, Element >,
+        llama::DE< dd::Y, Element >,
+        llama::DE< dd::Z, Element >
+    > >,
     llama::DE< dd::CForce,llama::DS< //coulomb forces
+        llama::DE< dd::X, Element >,
+        llama::DE< dd::Y, Element >,
+        llama::DE< dd::Z, Element >
+    > >,
+    llama::DE< dd::LForce,llama::DS< //laser forces
         llama::DE< dd::X, Element >,
         llama::DE< dd::Y, Element >,
         llama::DE< dd::Z, Element >
@@ -397,37 +416,38 @@ struct SingleParticleKernel
         for ( auto pos = start; pos < end; ++pos )
         {
             // cooling laser
-            Element lForce[3] = {
+            particles( pos )( dd::LForce(), dd::X() ) = 
                 cooling_linear( particles( pos )( dd::Vel(), dd::X()),
-                                ts), 
+                                ts); 
+            particles( pos )( dd::LForce(), dd::Y() ) = 
                 cooling_linear( particles( pos )( dd::Vel(), dd::Y()),
-                                ts),
+                                ts);
+            particles( pos )( dd::LForce(), dd::Z() ) = 
                 cooling_linear( particles( pos )( dd::Vel(), dd::Z()),
-                                ts),
-            };
+                                ts);
 
             // harmonic forces
-            Element hForce[3] = {
+            particles( pos )( dd::HForce(), dd::X() ) = 
                 particleCharge * ( -2.0 * voltage / rNullSquared) *
-                    ( particles( pos )( dd::Pos(), dd::X()) - rmin ),
+                    ( particles( pos )( dd::Pos(), dd::X()) - rmin );
+            particles( pos )( dd::HForce(), dd::Y() ) = 
                 particleCharge * ( -2.0 * voltage / rNullSquared) *
-                    ( particles( pos )( dd::Pos(), dd::Y()) - rmin ),
+                    ( particles( pos )( dd::Pos(), dd::Y()) - rmin );
+            particles( pos )( dd::HForce(), dd::Z() ) = 
                 particleCharge * ( -2.0 * voltage / rNullSquared) *
-                    ( particles( pos )( dd::Pos(), dd::Z()) - rmin )
-
-            };
+                    ( particles( pos )( dd::Pos(), dd::Z()) - rmin );
 
             // F_i = hforce_i + cforce_i + lforce_i
             Element const F_i[3] = {
-                particles( pos )( dd::CForce(), dd::X() ) +
-                    lForce[0] +
-                    hForce[0],
-                particles( pos )( dd::CForce(), dd::Y() ) +
-                    lForce[1] +
-                    hForce[1],
-                particles( pos )( dd::CForce(), dd::Z() ) +
-                    lForce[2] +
-                    hForce[2]
+                particles( pos )( dd::HForce(), dd::X() ) +
+                    particles( pos )( dd::CForce(), dd::X() ) +
+                    particles( pos )( dd::LForce(), dd::X() ),
+                particles( pos )( dd::HForce(), dd::Y() ) +
+                    particles( pos )( dd::CForce(), dd::Y() ) +
+                    particles( pos )( dd::LForce(), dd::Y() ),
+                particles( pos )( dd::HForce(), dd::Z() ) +
+                    particles( pos )( dd::CForce(), dd::Z() ) +
+                    particles( pos )( dd::LForce(), dd::Z() )
             };
 
             // F = m * a => d^2x/dt^2 = F(t,x,dx/dt) / m
@@ -470,11 +490,50 @@ struct SingleParticleKernel
             }
 
             // reset coulomb forces
+            //particles( pos )( dd::CForce(), dd::X() )  = 0;
+            //particles( pos )( dd::CForce(), dd::Y() )  = 0;
+            //particles( pos )( dd::CForce(), dd::Z() )  = 0;
+
+
+        }
+    }
+};
+
+template<
+    std::size_t problemSize,
+    std::size_t elems
+>
+struct ResetKernel
+{
+    template<
+        typename T_Acc,
+        typename T_View
+    >
+    LLAMA_FN_HOST_ACC_INLINE
+    void operator()(
+        T_Acc const &acc,
+        T_View particles
+    ) const
+    {
+        auto threadIndex  = alpaka::idx::getIdx<
+            alpaka::Grid,
+            alpaka::Threads
+        >( acc )[ 0u ];
+
+        auto const start = threadIndex * elems;
+        auto const   end = alpaka::math::min(
+            acc,
+            (threadIndex + 1) * elems,
+            problemSize
+        );
+
+        LLAMA_INDEPENDENT_DATA
+        for ( auto pos = start; pos < end; ++pos )
+        {
+            // reset coulomb forces
             particles( pos )( dd::CForce(), dd::X() )  = 0;
             particles( pos )( dd::CForce(), dd::Y() )  = 0;
             particles( pos )( dd::CForce(), dd::Z() )  = 0;
-
-
         }
     }
 };
@@ -686,10 +745,20 @@ int main(int argc,char * * argv)
         hostView(i)(dd::Vel(), dd::Y()) = 0;
         hostView(i)(dd::Vel(), dd::Z()) = 0;
 
+        // initialize harmonic force in X, Y, Z with zero
+        hostView(i)(dd::HForce(), dd::X()) = 0;
+        hostView(i)(dd::HForce(), dd::Y()) = 0;
+        hostView(i)(dd::HForce(), dd::Z()) = 0;
+
         // initialize coulomb force in X, Y, Z with zero
         hostView(i)(dd::CForce(), dd::X()) = 0;
         hostView(i)(dd::CForce(), dd::Y()) = 0;
         hostView(i)(dd::CForce(), dd::Z()) = 0;
+
+        // initialize laser force in X, Y, Z with zero
+        hostView(i)(dd::LForce(), dd::X()) = 0;
+        hostView(i)(dd::LForce(), dd::Y()) = 0;
+        hostView(i)(dd::LForce(), dd::Z()) = 0;
 
         // initialize mass with constant
 //         hostView(i)(dd::Mass()) = particleMass;
@@ -751,6 +820,10 @@ int main(int argc,char * * argv)
         problemSize,
         elemCount
     > singleParticleKernel;
+    ResetKernel<
+        problemSize,
+        elemCount
+    > resetKernel;
 
     // initialize progress bar
     Element progress;
@@ -759,6 +832,8 @@ int main(int argc,char * * argv)
         std::cout << "0%.....................50%...................100%\n";
         progress = 0.02;
     }
+
+    Element HForceAbs, CForceAbs, LForceAbs;
 
     std::size_t verletStep = 0;
     for ( std::size_t s = 0; s < steps; ++s)
@@ -773,6 +848,8 @@ int main(int argc,char * * argv)
 
         if ( s == 0 || s % DATA_DUMP_STEPS == 0 || s == (steps - 1) ){
             if ( myid == 0 ){
+
+
                 std::string i = std::to_string(s);
                 std::string fileName = "data";
                 fileName.append(i);
@@ -782,16 +859,66 @@ int main(int argc,char * * argv)
 
                 for (std::size_t i = 0; i < problemSize; ++i)
                 {
+                    // calculate absolute force values
+                    
+                    HForceAbs = sqrt(
+                            hostView(i)(dd::HForce(), dd::X()) *
+                            hostView(i)(dd::HForce(), dd::X()) +
+                            hostView(i)(dd::HForce(), dd::Y()) *
+                            hostView(i)(dd::HForce(), dd::Y()) +
+                            hostView(i)(dd::HForce(), dd::Z()) *
+                            hostView(i)(dd::HForce(), dd::Z()) 
+                            ); 
+
+                    CForceAbs = sqrt(
+                            hostView(i)(dd::CForce(), dd::X()) *
+                            hostView(i)(dd::CForce(), dd::X()) +
+                            hostView(i)(dd::CForce(), dd::Y()) *
+                            hostView(i)(dd::CForce(), dd::Y()) +
+                            hostView(i)(dd::CForce(), dd::Z()) *
+                            hostView(i)(dd::CForce(), dd::Z()) 
+                            ); 
+
+                    LForceAbs = sqrt(
+                            hostView(i)(dd::LForce(), dd::X()) *
+                            hostView(i)(dd::LForce(), dd::X()) +
+                            hostView(i)(dd::LForce(), dd::Y()) *
+                            hostView(i)(dd::LForce(), dd::Y()) +
+                            hostView(i)(dd::LForce(), dd::Z()) *
+                            hostView(i)(dd::LForce(), dd::Z()) 
+                            ); 
+
                     myfile << hostView(i)(dd::Pos(), dd::X()) \
                         << "," \
                         << hostView(i)(dd::Pos(), dd::Y()) \
                         << "," \
                         << hostView(i)(dd::Pos(), dd::Z()) \
+                        << "," \
+                        << HForceAbs \
+                        << "," \
+                        << CForceAbs \
+                        << "," \
+                        << LForceAbs \
                         << std::endl;
+
                 }
                 myfile.close();
             }
         }
+
+        alpaka::kernel::exec<Acc>(
+            queue,
+            workdiv,
+            resetKernel,
+            mirrowView
+        );
+        //for (std::size_t i = 0; i < problemSize; ++i)
+        //{
+        //    // initialize coulomb force in X, Y, Z with zero
+        //    hostView(i)(dd::CForce(), dd::X()) = 0;
+        //    hostView(i)(dd::CForce(), dd::Y()) = 0;
+        //    hostView(i)(dd::CForce(), dd::Z()) = 0;
+        //}
 
         /* pair-wise with local particles */
         alpaka::kernel::exec< Acc > (
