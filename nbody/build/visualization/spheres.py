@@ -8,29 +8,25 @@ import re
 from multiprocessing import cpu_count
 from joblib import Parallel, delayed
 
-def create_sphere(PosX, PosY, PosZ, force_p, size, mode="theta", size_factor=0.00001):
+def create_sphere(PosX, PosY, PosZ, force_p, size, size_factor=0.00001):
     s = vtk.vtkSphereSource()
     s.SetRadius(size * size_factor)
 
     s.SetCenter(PosX, PosY, PosZ)
-    if mode == "theta":
-        s.SetStartTheta(0)
-        s.SetEndTheta(force_p * 360.0)
-    elif mode == "phi":
-        s.SetStartPhi(0)
-        s.SetEndPhi(force_p * 180.0)
+
+    s.SetStartPhi(0)
+    s.SetEndPhi(force_p * 180.0)
+
     s.Update()
 
     ss = vtk.vtkSphereSource()
     ss.SetRadius(size * size_factor)
 
     ss.SetCenter(PosX, PosY, PosZ)
-    if mode == "theta":
-        ss.SetStartTheta(force_p * 360.0)
-        ss.SetEndTheta(360.0)
-    elif mode == "phi":
-        ss.SetStartPhi(force_p * 180.0)
-        ss.SetEndPhi(180.0)
+
+    ss.SetStartPhi(force_p * 180.0)
+    ss.SetEndPhi(180.0)
+
     ss.Update()
 
     return (s, ss)
@@ -49,7 +45,7 @@ def generate_spheres(HForce, CForce, LForce, PosX, PosY, PosZ, force):
         else:
             RelForce = force[i] / ForceSum
 
-        p, pp = create_sphere(PosX[i], PosY[i], PosZ[i], RelForce, 1, "phi")
+        p, pp = create_sphere(PosX[i], PosY[i], PosZ[i], RelForce, 1)
 
         data_phi1.AddInputData(p.GetOutput())
         data_phi2.AddInputData(pp.GetOutput())
