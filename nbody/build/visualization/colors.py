@@ -11,20 +11,20 @@ import colorsys
 
 def calculateColors(HForce, CForce, LForce, HForceMax, CForceMax, LForceMax):
 
-    hue = []
+    color = []
 
     for i in range(len(HForce)):
 
-        HForceRGB = HForce[i]/HForceMax
-        CForceRGB = CForce[i]/CForceMax
-        LForceRGB = LForce[i]/LForceMax
+        HForceRGB = int(HForce[i]/HForceMax * 255)
+        CForceRGB = int(CForce[i]/CForceMax * 255)
+        LForceRGB = int(LForce[i]/LForceMax * 255)
 
         # colorsys functions take values in range [0..1]
-        ForcesHSV = colorsys.rgb_to_hsv(HForceRGB, CForceRGB, LForceRGB)
+        #ForcesHSV = colorsys.rgb_to_hsv(HForceRGB, CForceRGB, LForceRGB)
 
-        hue.append(ForcesHSV[0])
+        color.append(f"{HForceRGB:03}"+f"{CForceRGB:03}"+f"{LForceRGB:03}")
 
-    return (hue)
+    return (color)
 
 # read csv result files from nbody simulation
 # and return arrays for positions and forces
@@ -62,11 +62,11 @@ def work(infile, maxX, HForceMax, CForceMax, LForceMax):
     timestep = re.findall(r'\d+', infile)
 
     # for individual particle
-    hue = calculateColors([HForces[maxX]], [CForces[maxX]], [LForces[maxX]], HForceMax, CForceMax, LForceMax)
+    color = calculateColors([HForces[maxX]], [CForces[maxX]], [LForces[maxX]], HForceMax, CForceMax, LForceMax)
 
     with open ("singleData" + str(timestep[0]) + ".csv", "w") as singleFile:
         singleFileWriter = csv.writer(singleFile, delimiter = ',')
-        singleFileWriter.writerow([PosX[maxX], PosY[maxX], PosZ[maxX], hue[0]])
+        singleFileWriter.writerow([PosX[maxX], PosY[maxX], PosZ[maxX], color[0]])
 
 
     # the other particles
@@ -78,11 +78,11 @@ def work(infile, maxX, HForceMax, CForceMax, LForceMax):
     del LForces[maxX]
 
 
-    hue = calculateColors(HForces, CForces, LForces, HForceMax, CForceMax, LForceMax)
+    color = calculateColors(HForces, CForces, LForces, HForceMax, CForceMax, LForceMax)
     with open ("multipleData" + str(timestep[0]) + ".csv", "w", newline='') as multipleFile:
         multipleFileWriter = csv.writer(multipleFile, delimiter = ',')
         for i in range(len(PosX)):
-            multipleFileWriter.writerow([PosX[i], PosY[i], PosZ[i], hue[i]])
+            multipleFileWriter.writerow([PosX[i], PosY[i], PosZ[i], color[i]])
 
 
 def main():

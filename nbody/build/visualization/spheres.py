@@ -8,8 +8,7 @@ import re
 from multiprocessing import cpu_count
 from joblib import Parallel, delayed
 
-# centers == positions
-# force_data == forces
+
 def generate_spheres(HForce, CForce, LForce, PosX, PosY, PosZ):
     data_phiH = vtk.vtkAppendPolyData()
     data_phiC = vtk.vtkAppendPolyData()
@@ -107,13 +106,33 @@ def read_csv(file):
     return ( PosX, PosY, PosZ, HForces, CForces, LForces )
 
 
-def work(infile):
+def work(infile, maxX):
 
     # read csv input file and extract data to arrays
     PosX, PosY, PosZ, HForces, CForces, LForces = read_csv(infile)
 
     # extract timestep
     timestep = re.findall(r'\d+', infile)
+
+    # for individual particle
+    p, pp, ppp = generate_spheres([HForces[maxX]], [CForces[maxX]], [LForces[maxX]], \
+        [PosX[maxX]], [PosY[maxX]], [PosZ[maxX]])
+    write_vtp("individual_phi_" + "HForces" + str(timestep[0]) + ".vtp", p)
+    write_vtp("individual_phi_" + "CForces" + str(timestep[0]) + ".vtp", pp)
+    write_vtp("individual_phi_" + "LForces" + str(timestep[0]) + ".vtp", ppp)
+
+    #with open ("data" + str(timestep[0]) + ".csv", "w") as singleFile:
+        #singleFileWriter = csv.writer(singleFile, delimiter = ',')
+        #singleFileWriter.writerow([PosX[maxX], PosY[maxX], PosZ[maxX], HForces[maxX], CForces[maxX], LForces[maxX]])
+
+
+    # the other particles
+    # remove dedicated particle from remaining bunch
+    del PosX[maxX]
+    del PosY[maxX]
+    del HForces[maxX]
+    del CForces[maxX]
+    del LForces[maxX]
 
     p, pp, ppp = generate_spheres(HForces, CForces, LForces, \
         PosX, PosY, PosZ)
@@ -122,13 +141,21 @@ def work(infile):
     write_vtp("spheres_phi_" + "LForces" + str(timestep[0]) + ".vtp", ppp)
 
 
+
+
 def main():
 
     num_cores = cpu_count()
     # load each result file for each time step and do the postprocessing on it
     path = '../'
 
-    Parallel(n_jobs = num_cores)(delayed(work)(infile) \
+    # find particle that is far away from center in first step
+    PosX, PosY, PosZ, HForces, CForces, LForces = read_csv('../data0.csv')
+
+    maxX = PosX.index( max(PosX) )
+
+    # execute postprocessing in parallel
+    Parallel(n_jobs = num_cores)(delayed(work)(infile, maxX) \
         for infile in glob.glob(os.path.join(path, 'data*.csv')))
 
 
