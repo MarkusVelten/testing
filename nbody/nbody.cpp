@@ -41,17 +41,20 @@
  *               Define relevant constants here                     *
  ***************************************************************** */
 
-#define NBODY_PROBLEM_SIZE 2048
+#define FACTOR 3
+
+//#define NBODY_PROBLEM_SIZE 2048
+#define NBODY_PROBLEM_SIZE 500
 #define NBODY_BLOCK_SIZE 128
-#define NBODY_STEPS 20000
-#define DATA_DUMP_STEPS 100 // write data to file every N steps
-#define RESIDUUM 0.05 // finish simulation at this residuum (max. velocity in [m/s])
+#define NBODY_STEPS 200000 * FACTOR
+#define DATA_DUMP_STEPS 100 * FACTOR // write data to file every N steps
+#define RESIDUUM 0.0001 // finish simulation at this residuum (max. velocity in [m/s])
 
 using Element = float; // change to double if needed
 
 constexpr Element EPS2 = 1e-10;
 
-constexpr Element ts = 1e-8; // timestep in [s]
+constexpr Element ts = 1e-8 / FACTOR; // timestep in [s]
 
 constexpr Element particleMass = 24*1.66053886E-27;// M(Mg)/A =  4.03594014⋅10−27 kg
 
@@ -104,7 +107,6 @@ namespace dd
     struct X {};
     struct Y {};
     struct Z {};
-    struct HForce {};
     struct CForce {};
 }
 
@@ -221,7 +223,8 @@ cooling_linear(
 )
 -> Element
 {
-    Element p=0.1; // 10%
+    //Element p=0.1; // 10%
+    Element p=0.3; // 10%
 
     Element dv = vk;
 
@@ -880,6 +883,9 @@ int main(int argc,char * * argv)
     //    progress = 0.02;
     //}
 
+    std::cout << DATA_DUMP_STEPS << std::endl;
+
+    auto maxSteps = DATA_DUMP_STEPS;
     std::cout << "Steps, Residuum (Velocity in [m/s])\n";
     // start simulation
     std::size_t s = 0;
@@ -1012,17 +1018,18 @@ int main(int argc,char * * argv)
         globalResiduum.collect_and_spread( dash::Team::All() );
         globalResiduum.wait( dash::Team::All() );
 
-        if ( s == 0 || s % DATA_DUMP_STEPS == 0 || s == (steps - 1) ){
+        //if ( s == 0 || s % DATA_DUMP_STEPS == 0 || s == (steps - 1) ){
+        if ( s == 0 || s % maxSteps == 0 || s == (steps - 1) ){
             if ( myid==0 ){
                 std::cout << s+1 <<  ", " << globalResiduum.get() << std::endl;
             }
         }
 
         ++s;
-    } while ( double(globalResiduum.get()) > RESIDUUM || s < 20 ); // need s < 20 to get initial residuum > RESIDUUM
+    } while ( ( double(globalResiduum.get()) > RESIDUUM || s < 20 ) && s < NBODY_STEPS ); // need s < 20 to get initial residuum > RESIDUUM
 
     // print final residuum
-    if ( s % DATA_DUMP_STEPS != 0 ){
+    if ( s % maxSteps != 0 ){
         if ( myid==0 ){
             std::cout << s+1 <<  ", " << globalResiduum.get() << std::endl;
         }
