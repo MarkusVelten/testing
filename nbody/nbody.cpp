@@ -34,27 +34,23 @@
 #include "HRChrono.hpp"
 #include "Dummy.hpp"
 #include "Human.hpp"
-#include "allreduce.h"
 
 
 /* ******************************************************************
  *               Define relevant constants here                     *
  ***************************************************************** */
 
-#define FACTOR 3
-
-//#define NBODY_PROBLEM_SIZE 2048
-#define NBODY_PROBLEM_SIZE 500
+#define NBODY_PROBLEM_SIZE 6000*30/1
 #define NBODY_BLOCK_SIZE 128
-#define NBODY_STEPS 200000 * FACTOR
-#define DATA_DUMP_STEPS 100 * FACTOR // write data to file every N steps
-#define RESIDUUM 0.0001 // finish simulation at this residuum (max. velocity in [m/s])
+#define NBODY_STEPS 5
+//#define NBODY_STEPS 10000
+#define DATA_DUMP_STEPS 100 // write data to file every N steps
 
 using Element = float; // change to double if needed
 
 constexpr Element EPS2 = 1e-10;
 
-constexpr Element ts = 1e-8 / FACTOR; // timestep in [s]
+constexpr Element ts = 1e-8; // timestep in [s]
 
 constexpr Element particleMass = 24*1.66053886E-27;// M(Mg)/A =  4.03594014⋅10−27 kg
 
@@ -144,33 +140,6 @@ using Particle = llama::DS<
     > >
 >;
 
-// used for residuum in SingleParticleKernel
-template <typename T, uint64_t size>
-struct cheapArray
-{
-    T data[size];
-    //-----------------------------------------------------------------------------
-    //! Access operator.
-    //!
-    //! \param index The index of the element to be accessed.
-    //!
-    //! Returns the requested element per reference.
-    ALPAKA_FN_HOST_ACC ALPAKA_FN_INLINE T &operator[](uint64_t index)
-    {
-        return data[index];
-    }
-    //-----------------------------------------------------------------------------
-    //! Access operator.
-    //!
-    //! \param index The index of the element to be accessed.
-    //!
-    //! Returns the requested element per constant reference.
-    ALPAKA_FN_HOST_ACC ALPAKA_FN_INLINE const T &operator[](uint64_t index) const
-    {
-        return data[index];
-    }
-};
-
 template<
     typename T_VirtualDatum1,
     typename T_VirtualDatum2
@@ -211,7 +180,6 @@ pPInteraction(
     }
 }
 
-
 template<
     typename T_VirtualDatum1
 >
@@ -223,13 +191,12 @@ cooling_linear(
 )
 -> Element
 {
-    //Element p=0.1; // 10%
-    Element p=0.3; // 10%
+    Element p=0.1; // 10%
 
     Element dv = vk;
 
     Element ln1p = log(1+p)/log(exp(1.0));
-
+    
     Element restore = -ln1p/ts * particleMass;
 
     return restore * dv;
@@ -398,8 +365,7 @@ struct ParticleInteractionKernel
 
 template<
     std::size_t problemSize,
-    std::size_t elems,
-    std::size_t blockSize
+    std::size_t elems
 >
 struct SingleParticleKernel
 {
@@ -412,18 +378,12 @@ struct SingleParticleKernel
         T_Acc const &acc,
         T_View particles,
         Element ts,
-        double* residuum,
         std::size_t verletStep
     ) const
     {
         auto threadIndex  = alpaka::idx::getIdx<
             alpaka::Grid,
             alpaka::Threads
-        >( acc )[ 0u ];
-
-        auto threadBlockIndex  = alpaka::idx::getIdx<
-            alpaka::Grid,
-            alpaka::Blocks
         >( acc )[ 0u ];
 
         auto const start = threadIndex * elems;
@@ -433,23 +393,13 @@ struct SingleParticleKernel
             problemSize
         );
 
-        auto const threadId(alpaka::idx::getIdx<alpaka::Block, alpaka::Threads>(acc)[0u]);
-
-        // allocate shared memory for block-local residuum
-        auto &localResiduum(
-            alpaka::block::shared::st::allocVar<cheapArray<Element, blockSize>,
-                                                    __COUNTER__>(acc));
-
-        localResiduum[threadId] = 0.0;
-
         LLAMA_INDEPENDENT_DATA
-        //for ( auto pos = start; pos < end; ++pos )
         for ( auto pos = start; pos < end; ++pos )
         {
             // cooling laser
             Element lForce[3] = {
                 cooling_linear( particles( pos )( dd::Vel(), dd::X()),
-                                ts),
+                                ts), 
                 cooling_linear( particles( pos )( dd::Vel(), dd::Y()),
                                 ts),
                 cooling_linear( particles( pos )( dd::Vel(), dd::Z()),
@@ -502,20 +452,20 @@ struct SingleParticleKernel
                     ( particles( pos )( dd::Vel(), dd::Z() ) +
                       0.5 * ts * a[2] );
 
-                particles( pos )( dd::Vel(), dd::X() ) +=
+                particles( pos )( dd::Vel(), dd::X() ) += 
                     0.5 * ts * a[0];
-                particles( pos )( dd::Vel(), dd::Y() ) +=
+                particles( pos )( dd::Vel(), dd::Y() ) += 
                     0.5 * ts * a[1];
-                particles( pos )( dd::Vel(), dd::Z() ) +=
+                particles( pos )( dd::Vel(), dd::Z() ) += 
                     0.5 * ts * a[2];
             }
             // verlet-integration part 2
             if ( verletStep == 1 ){
-                particles( pos )( dd::Vel(), dd::X() ) +=
+                particles( pos )( dd::Vel(), dd::X() ) += 
                     0.5 * ts * a[0];
-                particles( pos )( dd::Vel(), dd::Y() ) +=
+                particles( pos )( dd::Vel(), dd::Y() ) += 
                     0.5 * ts * a[1];
-                particles( pos )( dd::Vel(), dd::Z() ) +=
+                particles( pos )( dd::Vel(), dd::Z() ) += 
                     0.5 * ts * a[2];
             }
 
@@ -524,61 +474,8 @@ struct SingleParticleKernel
             particles( pos )( dd::CForce(), dd::Y() )  = 0;
             particles( pos )( dd::CForce(), dd::Z() )  = 0;
 
-            // calculate residuum
-            Element VelAbs = sqrt(
-                particles( pos )( dd::Vel(), dd::X() ) *
-                particles( pos )( dd::Vel(), dd::X() ) +
-                particles( pos )( dd::Vel(), dd::Y() ) *
-                particles( pos )( dd::Vel(), dd::Y() ) +
-                particles( pos )( dd::Vel(), dd::Z() ) *
-                particles( pos )( dd::Vel(), dd::Z() )
-                    );
-
-            localResiduum[threadId] = alpaka::math::max( acc, localResiduum[threadId], VelAbs );
 
         }
-
-        syncBlockThreads(acc);
-
-        auto n = NBODY_BLOCK_SIZE / 2;
-
-        // these two versions do not work: we do not get block-individual output. Is this caused by the for-loops?! they seem to be executed by block 0 only...
-        //while (n) {
-        //    if (threadId < n && (threadId + n) < blockSize)
-        //        //localResiduum[threadId] = alpaka::math::max(acc, localResiduum[threadId], localResiduum[threadId + n]);
-        //        localResiduum[threadId] = threadId;
-
-        //    n /= 2;
-
-        //    syncBlockThreads(acc);
-        //}
-        //if (threadId == 0){
-        //for ( int i=0; i<blockSize && i<(problemSize - threadBlockIndex * blockSize); i++){  
-        //    //localResiduum[0] = alpaka::math::max( acc, localResiduum[threadId], localResiduum[threadId+1]);
-        //    localResiduum[0] = threadBlockIndex;
-        //    syncBlockThreads(acc);
-        //}
-        //}
-
-        // this version works
-        if (threadId == 0){
-        int i=0;
-        while(i<blockSize-1 && i<(problemSize - threadBlockIndex * blockSize)-1){
-            //localResiduum[0] = i; // gives the correct number of threads used in each block
-            //localResiduum[0] = threadBlockIndex; // gives correct block Id
-            //localResiduum[0] = localResiduum[120]; 
-            localResiduum[0] = alpaka::math::max( acc, localResiduum[0], localResiduum[i+1]);
-            //localResiduum[0] = alpaka::math::max( acc, localResiduum[0], localResiduum[i]);
-            i++; 
-        }
-
-        //if (threadId == 0)
-            residuum[threadBlockIndex] = localResiduum[0];
-            //residuum[threadBlockIndex] = threadId;
-        }
-
-        syncBlockThreads(acc);
-
     }
 };
 
@@ -679,8 +576,8 @@ int main(int argc,char * * argv)
 #else
     using Queue = alpaka::queue::QueueCpuSync;
 #endif // NBODY_CUDA
-    DevAcc const devAcc( alpaka::pltf::getDevByIdx< PltfAcc >( 0u ) );
-    DevHost const devHost( alpaka::pltf::getDevByIdx< PltfHost >( 0u ) );
+    DevAcc const devAcc( alpaka::pltf::getDevByIdx< PltfAcc >( atoi( getenv( "SLURM_LOCALID" ) )));
+    DevHost const devHost( alpaka::pltf::getDevByIdx< PltfHost >( 0 ));
     Queue queue( devAcc ) ;
 
     // abstraction to distribute computation, 1D array (?)
@@ -743,23 +640,23 @@ int main(int argc,char * * argv)
             particle
         >
     >;
-
-    //if (myid == 0) {
-    //    std::cout << (size * problemSize) / 1000 << " thousand particles (";
-    //    std::cout << human_readable(size * (problemSize * llama::SizeOf<Particle>::value)) << ")\n";
-    //}
-
+    
+    if (myid == 0) {
+        std::cout << size << " Size; " << (size * problemSize) << " particles (";
+        std::cout << human_readable(size * (problemSize * llama::SizeOf<Particle>::value)) << ")\n";
+    }
+   
     HRChrono chrono;
 
     particles.allocate(size * problemSize);
     auto   hostView = LocalFactory::allocView( mapping, particles.lbegin() );
     auto    devView =    DevFactory::allocView( mapping,  devAcc );
-    auto mirrorView = MirrorFactory::allocView( mapping, devView );
+    auto mirrowView = MirrorFactory::allocView( mapping, devView );
 
     // will be used as double buffer for remote->host and host->device copying
     auto   remoteHostView =   HostFactory::allocView( mapping, devHost );
     auto    remoteDevView =    DevFactory::allocView( mapping,  devAcc );
-    auto remoteMirrorView = MirrorFactory::allocView( mapping, devView );
+    auto remoteMirrowView = MirrorFactory::allocView( mapping, devView );
 
     //chrono.printAndReset("Alloc:");
 
@@ -852,29 +749,10 @@ int main(int argc,char * * argv)
     > particleInteractionKernel;
     SingleParticleKernel<
         problemSize,
-        elemCount,
-        blockSize
+        elemCount
     > singleParticleKernel;
 
-    // for residuum
-    double* blockResiduum = new double[ blocks[0] ]; //each block has it's owm residuum
-
-    auto hostMemory = alpaka::mem::buf::alloc<double, Size>(devHost, blocks[0] * sizeof(double));
-
-    alpaka::mem::buf::Buf<DevAcc, double, Dim, Size> sourceDeviceMemory =
-        alpaka::mem::buf::alloc<double, Size>(devAcc, blocks[0]*sizeof(double));
-
-    alpaka::mem::view::copy(queue, sourceDeviceMemory, hostMemory, blocks[0] * sizeof(double));
-
-    Allreduce globalResiduum( dash::Team::All() );
-
-    auto unitResiduum = 0.0; // residuum for each unit
-
-    double n = blocks[0] / 2;
-
-    // for verlet integration
-    std::size_t verletStep = 0;
-
+   
     // initialize progress bar
     Element progress;
     //if ( myid == 0 ){
@@ -882,24 +760,18 @@ int main(int argc,char * * argv)
     //    std::cout << "0%.....................50%...................100%\n";
     //    progress = 0.02;
     //}
+    
 
-    std::cout << DATA_DUMP_STEPS << std::endl;
-
-    auto maxSteps = DATA_DUMP_STEPS;
-    std::cout << "Steps, Residuum (Velocity in [m/s])\n";
-    // start simulation
-    std::size_t s = 0;
-    //for ( std::size_t s = 0; s < steps; ++s)
-    do
+    std::size_t verletStep = 0;
+    for ( std::size_t s = 0; s < steps; ++s)
     {
-        // TODO: // copy the data to the GPU
-        // alpaka::mem::view::copy(queue, sourceDeviceMemory, hostMemory, n);
-
+        
         //std::cout<<(Element)s/(Element)steps<<std::endl;
         //if ( ( (Element)s/(Element)steps ) >= progress && myid == 0 ){
         //    progress+=0.02;
         //    std::cout << "."<<std::flush;
         //}
+        
 
         // dump data to file, print first and last step and in given interval
         /*
@@ -931,12 +803,12 @@ int main(int argc,char * * argv)
             queue,
             workdiv,
             particleInteractionKernel,
-            mirrorView,
-            mirrorView,
+            mirrowView,
+            mirrowView,
             ts
         );
 
-        //chrono.printAndReset("Update kernel:       ");
+        chrono.printAndReset("ParticleInteractionKernel:       ");
 
         /* pair-wise with remote particles */
         for (dart_unit_t unit_it = 1; unit_it < size; ++unit_it)
@@ -957,8 +829,8 @@ int main(int argc,char * * argv)
                 queue,
                 workdiv,
                 particleInteractionKernel,
-                mirrorView,
-                remoteMirrorView,
+                mirrowView,
+                remoteMirrowView,
                 ts
             );
 
@@ -972,67 +844,21 @@ int main(int argc,char * * argv)
             queue,
             workdiv,
             singleParticleKernel,
-            mirrorView,
+            mirrowView,
             ts,
-            alpaka::mem::view::getPtrNative(sourceDeviceMemory),
             verletStep
         );
-        //chrono.printAndReset("Move kernel:         ");
-        /* TODO: //  download result from GPU
-        T resultGpuHost;
-        auto resultGpuDevice =
-        alpaka::mem::view::ViewPlainPtr<DevHost, T, Dim, Idx>(
-        &resultGpuHost, devHost, static_cast<Extent>(blockSize));
-        alpaka::mem::view::copy(queue, resultGpuDevice, destinationDeviceMemory, 1);
-        */
+        chrono.printAndReset("SingleParticleKernel:         ");
 
+        dummy( static_cast<void*>( mirrowView.blob[0] ) );
 
-        dummy( static_cast<void*>( mirrorView.blob[0] ) );
-
-        alpaka::mem::view::copy(queue,
-            hostPlain,
-            devView.blob[0].buffer,
+            alpaka::mem::view::copy(queue,
+                hostPlain,
+                devView.blob[0].buffer,
                 problemSize * llama::SizeOf<Particle>::value);
 
-        particles.barrier();
+            particles.barrier();
 
-        // get residuum array back from kernel w/ number of elements = number of blocks
-        alpaka::mem::view::copy(queue, hostMemory, sourceDeviceMemory, sizeof(double)*blocks[0]);
-        blockResiduum = alpaka::mem::view::getPtrNative(hostMemory);
-
-        
-
-        // residuum from blocks
-        if ( blocks[0] > 1){
-            for (int id = 1; id < blocks[0]; id++){
-                blockResiduum[0] = max(blockResiduum[0], blockResiduum[id]);
-            }
-        }
-        unitResiduum = blockResiduum[0];
-
-        /* res from this iteration */
-        //globalResiduum.set( blockResiduum, dash::Team::All() );
-        globalResiduum.set( &unitResiduum, dash::Team::All() );
-
-        // calculate global residuum
-        globalResiduum.collect_and_spread( dash::Team::All() );
-        globalResiduum.wait( dash::Team::All() );
-
-        //if ( s == 0 || s % DATA_DUMP_STEPS == 0 || s == (steps - 1) ){
-        if ( s == 0 || s % maxSteps == 0 || s == (steps - 1) ){
-            if ( myid==0 ){
-                std::cout << s+1 <<  ", " << globalResiduum.get() << std::endl;
-            }
-        }
-
-        ++s;
-    } while ( ( double(globalResiduum.get()) > RESIDUUM || s < 20 ) && s < NBODY_STEPS ); // need s < 20 to get initial residuum > RESIDUUM
-
-    // print final residuum
-    if ( s % maxSteps != 0 ){
-        if ( myid==0 ){
-            std::cout << s+1 <<  ", " << globalResiduum.get() << std::endl;
-        }
     }
 
     //std::cout<<std::endl; // at the end of progress bar
