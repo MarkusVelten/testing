@@ -4,7 +4,7 @@
 #include <fstream>
 #include <math.h>
 
-#include <libdash.h> // requires MPI, allows easy access to data containers
+#include <libdash.h>
 
 #ifdef ALPAKA_ACC_GPU_CUDA_ENABLED
 #define NBODY_CUDA 1
@@ -19,13 +19,13 @@
     #define BOOST_PP_VARIADICS 1
 #endif
 
-#include <alpaka/alpaka.hpp> // used for abstract kernels, for GPUs and CPUs
+#include <alpaka/alpaka.hpp> 
 #ifdef __CUDACC__
 	#define LLAMA_FN_HOST_ACC_INLINE ALPAKA_FN_ACC __forceinline__
 #else
 	#define LLAMA_FN_HOST_ACC_INLINE ALPAKA_FN_ACC inline
 #endif
-#include <llama/llama.hpp> // for data structures, maps defined access pattern to one that is ideal for the machine
+#include <llama/llama.hpp> 
 #include <random>
 
 #include <AlpakaAllocator.hpp>
@@ -40,19 +40,17 @@
  *               Define relevant constants here                     *
  ***************************************************************** */
 
-#define NBODY_PROBLEM_SIZE 6000*30/1
+#define NUM_GPUS 1
+#define NBODY_PROBLEM_SIZE 6000 * 30 / NUM_GPUS
 #define NBODY_BLOCK_SIZE 128
-#define NBODY_STEPS 5
-//#define NBODY_STEPS 10000
+#define NBODY_STEPS 10000
 #define DATA_DUMP_STEPS 100 // write data to file every N steps
 
 using Element = float; // change to double if needed
 
-constexpr Element EPS2 = 1e-10;
-
 constexpr Element ts = 1e-8; // timestep in [s]
 
-constexpr Element particleMass = 24*1.66053886E-27;// M(Mg)/A =  4.03594014⋅10−27 kg
+constexpr Element particleMass = 24*1.66053886E-27;// in [kg]
 
 constexpr Element particleCharge = 1.6021766209e-19; // [C]
 
@@ -66,35 +64,6 @@ constexpr Element rNullSquared = rNull*rNull; // [m]
 constexpr Element phys_c        = 299792458.;
 constexpr Element phys_emfactor = phys_c * phys_c * 1E-7;
 
-/* *************************************************************** */
-
-
-/*
-HarmonicField:
-// With a potential of                                                   //
-//                                                                       //
-// V(r) = ( U / r0^2 ) * (r-rmin)^2                                      //
-//                                                                       //
-// where U [V] is the voltage and r0 [m] is the potential depth          //
-// the corresponding force on a particle of charge q [C] is              //
-//                                                                       //
-// hforce = q * ( - 2U / r0^2 ) * (r-rmin)                               //
-//                                                                       //
-// where - 2U / r0^2 is the restoring force factor for the harmonic      //
-// potential V.                                                          //
-//                                                                       //
-U = 5V, r0 = 1µm, q = 2e = 3.204353e-19 C
-[hforce] = [C*(V/m^2)*m] = [C*V/m] = [J/m] = [Nm/m] = [N]
-
-CoulombForce, i<->j
-F_i,j = _md_phys_emfactor * q^2 / ||pos(i)-pos(j)||_2^3 * (pos(i)-pos(j))
-
-Equation of Motion
-F_i = hforce_i + cforce_i
-F = m * a => d^2x/dt^2 = F(t,x,dx/dt) / m
-v += a * dt
-pos += v * dt
-*/
 
 namespace dd
 {
@@ -141,19 +110,21 @@ using Particle = llama::DS<
 >;
 
 template<
+    typename T_Acc,
     typename T_VirtualDatum1,
     typename T_VirtualDatum2
 >
 LLAMA_FN_HOST_ACC_INLINE
 auto
 pPInteraction(
+    T_Acc const &acc,
     T_VirtualDatum1&& localP, //self
     T_VirtualDatum2&& remoteP, //comparison
     Element const & ts
 )
 -> void
 {
-    // main computation for two elements
+    // distance between two elements
     Element const d[3] = {
         localP( dd::Pos(), dd::X() ) -
         remoteP( dd::Pos(), dd::X() ),
@@ -164,7 +135,7 @@ pPInteraction(
     };
 
     Element distSqr = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
-    Element dist = sqrt(distSqr);
+    Element dist = alpaka::math::sqrt( acc, distSqr );
     Element distCube = distSqr * dist;
 
     Element forcefactor;
@@ -181,11 +152,13 @@ pPInteraction(
 }
 
 template<
+    typename T_Acc,
     typename T_VirtualDatum1
 >
 LLAMA_FN_HOST_ACC_INLINE
 auto
 cooling_linear(
+    T_Acc const &acc,
     T_VirtualDatum1&& vk, //self
     Element const & ts
 )
@@ -195,7 +168,8 @@ cooling_linear(
 
     Element dv = vk;
 
-    Element ln1p = log(1+p)/log(exp(1.0));
+    Element ln1p = alpaka::math::log( acc, (1+p)) /
+                   alpaka::math::log( acc, alpaka::math::exp( acc, 1.0 ) );
     
     Element restore = -ln1p/ts * particleMass;
 
@@ -321,8 +295,8 @@ struct ParticleInteractionKernel
         >( acc )[ 0u ];
 
         auto threadBlockIndex  = alpaka::idx::getIdx<
-            alpaka::Block,
-            alpaka::Threads
+            alpaka::Grid,
+            alpaka::Blocks
         >( acc )[ 0u ];
 
         auto const start = threadIndex * elems;
@@ -347,7 +321,8 @@ struct ParticleInteractionKernel
                 pos2 + threadBlockIndex < end2;
                 pos2 += threads
             )
-                temp(pos2 + threadBlockIndex) = remoteParticles( start2 + pos2 + threadBlockIndex );
+                temp( pos2 + threadBlockIndex ) = 
+                    remoteParticles( start2 + pos2 + threadBlockIndex );
 
             // compute loop
             LLAMA_INDEPENDENT_DATA
@@ -355,6 +330,7 @@ struct ParticleInteractionKernel
                 LLAMA_INDEPENDENT_DATA
                 for ( auto pos = start; pos < end; ++pos )
                     pPInteraction(
+                        acc,
                         localParticles( pos ),
                         temp( pos2 ),
                         ts
@@ -398,22 +374,25 @@ struct SingleParticleKernel
         {
             // cooling laser
             Element lForce[3] = {
-                cooling_linear( particles( pos )( dd::Vel(), dd::X()),
+                cooling_linear( acc,
+                                particles( pos )( dd::Vel(), dd::X() ),
                                 ts), 
-                cooling_linear( particles( pos )( dd::Vel(), dd::Y()),
+                cooling_linear( acc,
+                                particles( pos )( dd::Vel(), dd::Y() ),
                                 ts),
-                cooling_linear( particles( pos )( dd::Vel(), dd::Z()),
+                cooling_linear( acc,
+                                particles( pos )( dd::Vel(), dd::Z() ),
                                 ts),
             };
 
             // harmonic forces
             Element hForce[3] = {
-                particleCharge * ( -2.0 * voltage / rNullSquared) *
-                    ( particles( pos )( dd::Pos(), dd::X()) - rmin ),
-                particleCharge * ( -2.0 * voltage / rNullSquared) *
-                    ( particles( pos )( dd::Pos(), dd::Y()) - rmin ),
-                particleCharge * ( -2.0 * voltage / rNullSquared) *
-                    ( particles( pos )( dd::Pos(), dd::Z()) - rmin )
+                particleCharge * ( -2.0 * voltage / rNullSquared ) *
+                    ( particles( pos )( dd::Pos(), dd::X() ) - rmin ),
+                particleCharge * ( -2.0 * voltage / rNullSquared ) *
+                    ( particles( pos )( dd::Pos(), dd::Y() ) - rmin ),
+                particleCharge * ( -2.0 * voltage / rNullSquared ) *
+                    ( particles( pos )( dd::Pos(), dd::Z() ) - rmin )
 
             };
 
@@ -459,6 +438,7 @@ struct SingleParticleKernel
                 particles( pos )( dd::Vel(), dd::Z() ) += 
                     0.5 * ts * a[2];
             }
+            
             // verlet-integration part 2
             if ( verletStep == 1 ){
                 particles( pos )( dd::Vel(), dd::X() ) += 
@@ -470,10 +450,7 @@ struct SingleParticleKernel
             }
 
             // reset coulomb forces
-            particles( pos )( dd::CForce(), dd::X() )  = 0;
-            particles( pos )( dd::CForce(), dd::Y() )  = 0;
-            particles( pos )( dd::CForce(), dd::Z() )  = 0;
-
+            particles( pos )( dd::CForce() )  = 0;
 
         }
     }
@@ -580,7 +557,6 @@ int main(int argc,char * * argv)
     DevHost const devHost( alpaka::pltf::getDevByIdx< PltfHost >( 0 ));
     Queue queue( devAcc ) ;
 
-    // abstraction to distribute computation, 1D array (?)
     dash::init(&argc, &argv);
 
     dart_unit_t myid = dash::myid();
@@ -665,8 +641,7 @@ int main(int argc,char * * argv)
         Element( 0 ), // mean
         Element( 5e-4 )  // stddev
     );
-    // TODO: set 1 to sigma from TMDUtils.cpp
-    // TODO: initialize vel with that sigma
+
     auto seed = distribution(generator);
     LLAMA_INDEPENDENT_DATA
     for (std::size_t i = 0; i < problemSize; ++i)
@@ -682,30 +657,19 @@ int main(int argc,char * * argv)
         hostView(i)(dd::Pos(), dd::Z()) = seed;
 
         // initialize velocity in X, Y, Z with zero (approximation)
-        hostView(i)(dd::Vel(), dd::X()) = 0;
-        hostView(i)(dd::Vel(), dd::Y()) = 0;
-        hostView(i)(dd::Vel(), dd::Z()) = 0;
+        hostView(i)(dd::Vel()) = 0;
 
         // initialize coulomb force in X, Y, Z with zero
-        hostView(i)(dd::CForce(), dd::X()) = 0;
-        hostView(i)(dd::CForce(), dd::Y()) = 0;
-        hostView(i)(dd::CForce(), dd::Z()) = 0;
+        hostView(i)(dd::CForce()) = 0;
 
-        // initialize mass with constant
-//         hostView(i)(dd::Mass()) = particleMass;
         /*
+        // print initial position
         std::cout << hostView(i)(dd::Pos(), dd::X()) \
-            << "\t" \
-            << hostView(i)(dd::Pos(), dd::Y()) \
-            << "\t" \
-            << hostView(i)(dd::Pos(), dd::Z()) \
-            << "\t" \
-            << hostView(i)(dd::Vel(), dd::X()) \
-            << "\t" \
-            << hostView(i)(dd::HForce(), dd::X()) \
-            << "\t" \
-            << hostView(i)(dd::Mass()) \
-            << std::endl;
+                  << "\t" \
+                  << hostView(i)(dd::Pos(), dd::Y()) \
+                  << "\t" \
+                  << hostView(i)(dd::Pos(), dd::Z()) \
+                  << std::endl;
         */
     }
 
@@ -753,28 +717,32 @@ int main(int argc,char * * argv)
     > singleParticleKernel;
 
    
+    /*
     // initialize progress bar
     Element progress;
-    //if ( myid == 0 ){
-    //    std::cout << "Progress:\n";
-    //    std::cout << "0%.....................50%...................100%\n";
-    //    progress = 0.02;
-    //}
+    if ( myid == 0 ){
+        std::cout << "Progress:\n";
+        std::cout << "0%.....................50%...................100%\n";
+        progress = 0.02;
+    }
+    */
     
 
     std::size_t verletStep = 0;
-    for ( std::size_t s = 0; s < steps; ++s)
+    for ( std::size_t s = 0; s < steps; ++s )
     {
-        
-        //std::cout<<(Element)s/(Element)steps<<std::endl;
-        //if ( ( (Element)s/(Element)steps ) >= progress && myid == 0 ){
-        //    progress+=0.02;
-        //    std::cout << "."<<std::flush;
-        //}
+        /*    
+        // calculate progress & print progress bar
+        std::cout << (Element)s / (Element)steps << std::endl;
+        if ( ( (Element)s / (Element)steps ) >= progress && myid == 0 ){
+            progress += 0.02;
+            std::cout << "." << std::flush;
+        }
+        */
         
 
-        // dump data to file, print first and last step and in given interval
         /*
+        // dump data to file, print first and last step and in given interval
         if ( s == 0 || s % DATA_DUMP_STEPS == 0 || s == (steps - 1) ){
             if ( myid == 0 ){
                 std::string i = std::to_string(s);
@@ -782,16 +750,16 @@ int main(int argc,char * * argv)
                 fileName.append(i);
                 fileName.append(".csv");
                 std::fstream myfile;
-                myfile.open(fileName, std::fstream::out | std::fstream::trunc);
+                myfile.open( fileName, std::fstream::out | std::fstream::trunc );
 
                 for (std::size_t i = 0; i < problemSize; ++i)
                 {
                     myfile << hostView(i)(dd::Pos(), dd::X()) \
-                        << "," \
-                        << hostView(i)(dd::Pos(), dd::Y()) \
-                        << "," \
-                        << hostView(i)(dd::Pos(), dd::Z()) \
-                        << std::endl;
+                           << "," \
+                           << hostView(i)(dd::Pos(), dd::Y()) \
+                           << "," \
+                           << hostView(i)(dd::Pos(), dd::Z()) \
+                           << std::endl;
                 }
                 myfile.close();
             }
@@ -811,7 +779,7 @@ int main(int argc,char * * argv)
         chrono.printAndReset("ParticleInteractionKernel:       ");
 
         /* pair-wise with remote particles */
-        for (dart_unit_t unit_it = 1; unit_it < size; ++unit_it)
+        for ( dart_unit_t unit_it = 1; unit_it < size; ++unit_it )
         {
             dart_unit_t remote = (myid + unit_it) % size;
 
@@ -839,6 +807,7 @@ int main(int argc,char * * argv)
         }
 
         verletStep = s%2;
+
         // move kernel
         alpaka::kernel::exec<Acc>(
             queue,
