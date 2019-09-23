@@ -160,12 +160,14 @@ using Particle = llama::DS<
 >;
 
 template<
+    typename T_Acc,
     typename T_VirtualDatum1,
     typename T_VirtualDatum2
 >
 LLAMA_FN_HOST_ACC_INLINE
 auto
 pPInteraction(
+    T_Acc const & acc,
     T_VirtualDatum1&& localP, //self
     T_VirtualDatum2&& remoteP, //comparison
     Element const & ts
@@ -183,7 +185,7 @@ pPInteraction(
     };
 
     Element distSqr = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
-    Element dist = sqrt(distSqr);
+    Element dist = alpaka::math::sqrt(acc, distSqr);
     Element distCube = distSqr * dist;
 
     Element forcefactor;
@@ -200,11 +202,13 @@ pPInteraction(
 }
 
 template<
+    typename T_Acc,
     typename T_VirtualDatum1
 >
 LLAMA_FN_HOST_ACC_INLINE
 auto
 cooling_linear(
+    T_Acc const &acc,
     T_VirtualDatum1&& vk, //self
     Element const & ts
 )
@@ -214,7 +218,7 @@ cooling_linear(
 
     Element dv = vk;
 
-    Element ln1p = log(1+p)/log(exp(1.0));
+    Element ln1p = alpaka::math::log(acc, (1+p));
     
     Element restore = -ln1p/ts * particleMass;
 
@@ -340,8 +344,8 @@ struct ParticleInteractionKernel
         >( acc )[ 0u ];
 
         auto threadBlockIndex  = alpaka::idx::getIdx<
-            alpaka::Block,
-            alpaka::Threads
+            alpaka::Grid,
+            alpaka::Blocks
         >( acc )[ 0u ];
 
         auto const start = threadIndex * elems;
@@ -374,6 +378,7 @@ struct ParticleInteractionKernel
                 LLAMA_INDEPENDENT_DATA
                 for ( auto pos = start; pos < end; ++pos )
                     pPInteraction(
+                        acc,
                         localParticles( pos ),
                         temp( pos2 ),
                         ts
@@ -417,13 +422,16 @@ struct SingleParticleKernel
         {
             // cooling laser
             particles( pos )( dd::LForce(), dd::X() ) = 
-                cooling_linear( particles( pos )( dd::Vel(), dd::X()),
+                cooling_linear( acc,
+                                particles( pos )( dd::Vel(), dd::X()),
                                 ts); 
             particles( pos )( dd::LForce(), dd::Y() ) = 
-                cooling_linear( particles( pos )( dd::Vel(), dd::Y()),
+                cooling_linear( acc,
+                                particles( pos )( dd::Vel(), dd::Y()),
                                 ts);
             particles( pos )( dd::LForce(), dd::Z() ) = 
-                cooling_linear( particles( pos )( dd::Vel(), dd::Z()),
+                cooling_linear( acc,
+                                particles( pos )( dd::Vel(), dd::Z()),
                                 ts);
 
             // harmonic forces
